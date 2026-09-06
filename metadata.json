@@ -1,0 +1,6 @@
+{
+  "name": "CineStream",
+  "description": "A premium cinematic mobile movie streaming and discovery app with trending feeds, watchlist, movie player, and search.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

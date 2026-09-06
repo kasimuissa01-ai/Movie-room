@@ -1,0 +1,368 @@
+package com.example.ui
+
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Scaffold
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.example.data.SampleMovies
+import com.example.ui.components.AdminLoginDialog
+import com.example.ui.components.AdminUploadMovieDialog
+import com.example.ui.navigation.CineBottomBar
+import com.example.ui.navigation.CineNavTab
+import com.example.ui.screens.CategoryDetailScreen
+import com.example.ui.screens.GoogleAuthScreen
+import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.MovieDetailsScreen
+import com.example.ui.screens.MyListScreen
+import com.example.ui.screens.OnboardingScreen
+import com.example.ui.screens.ProfileScreen
+import com.example.ui.screens.SearchScreen
+import com.example.ui.screens.VideoPlayerScreen
+import com.example.ui.theme.CineBlack
+import java.net.URLDecoder
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
+
+@Composable
+fun CineApp(
+    viewModel: MovieViewModel = viewModel()
+) {
+    val navController = rememberNavController()
+    val onboardingCompleted by viewModel.onboardingCompleted.collectAsState()
+    val watchlistMovies by viewModel.watchlistMovies.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsState()
+    val selectedGenreFilter by viewModel.selectedGenreFilter.collectAsState()
+    val searchResults by viewModel.searchResults.collectAsState()
+    val recentSearches by viewModel.recentSearches.collectAsState()
+    val isSearchingTmdb by viewModel.isSearchingTmdb.collectAsState()
+
+    val isAdminLoggedIn by viewModel.isAdminLoggedIn.collectAsState()
+    val uploadedMovies by viewModel.uploadedMovies.collectAsState()
+
+    val isGoogleSignedIn by viewModel.isGoogleSignedIn.collectAsState()
+    val isFirestoreSynced by viewModel.isFirestoreSynced.collectAsState()
+    val userDisplayName by viewModel.userDisplayName.collectAsState()
+    val userEmail by viewModel.userEmail.collectAsState()
+    val userPhotoUrl by viewModel.userPhotoUrl.collectAsState()
+    val firestoreUsers by viewModel.firestoreUsers.collectAsState()
+    val isLoadingFirestoreUsers by viewModel.isLoadingFirestoreUsers.collectAsState()
+
+    val context = LocalContext.current
+
+    var showAdminLoginDialog by remember { mutableStateOf(false) }
+    var showAdminUploadDialog by remember { mutableStateOf(false) }
+
+    var currentTab by remember { mutableStateOf(CineNavTab.HOME) }
+
+    val startDestination = rememberSaveable {
+        when {
+            !viewModel.onboardingCompleted.value -> "onboarding"
+            !viewModel.isGoogleSignedIn.value -> "auth"
+            else -> "main"
+        }
+    }
+
+    NavHost(
+        navController = navController,
+        startDestination = startDestination,
+        enterTransition = { fadeIn(animationSpec = tween(300)) },
+        exitTransition = { fadeOut(animationSpec = tween(300)) }
+    ) {
+        // Onboarding Screen
+        composable("onboarding") {
+            OnboardingScreen(
+                onFinished = {
+                    viewModel.completeOnboarding()
+                    navController.navigate("auth") {
+                        popUpTo("onboarding") { inclusive = true }
+                        launchSingleTop = true
+                    }
+                }
+            )
+        }
+
+        // Google Authentication Welcome Screen
+        composable("auth") {
+            GoogleAuthScreen(
+                viewModel = viewModel,
+                onAuthSuccess = {
+                    navController.navigate("main") {
+                        popUpTo("auth") { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onSkipGuest = {
+                    navController.navigate("main") {
+                        popUpTo("auth") { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                canDismiss = navController.previousBackStackEntry != null
+            )
+        }
+
+        // Main App with Bottom Navigation
+        composable("main") {
+            Scaffold(
+                bottomBar = {
+                    CineBottomBar(
+                        currentTab = currentTab,
+                        onTabSelected = { tab -> currentTab = tab },
+                        watchListCount = watchlistMovies.size
+                    )
+                },
+                containerColor = CineBlack,
+                contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0)
+            ) { innerPadding ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(bottom = innerPadding.calculateBottomPadding())
+                ) {
+                    when (currentTab) {
+                        CineNavTab.HOME -> {
+                            HomeScreen(
+                                featuredMovies = viewModel.featuredMovies,
+                                categories = viewModel.categories,
+                                onMovieClick = { movie ->
+                                    navController.navigate("details/${movie.id}")
+                                },
+                                onWatchClick = { movie ->
+                                    navController.navigate("player/${movie.id}/false")
+                                },
+                                onSeeAllClick = { categoryKey, categoryTitle ->
+                                    val encodedKey = URLEncoder.encode(categoryKey, StandardCharsets.UTF_8.toString())
+                                    val encodedTitle = URLEncoder.encode(categoryTitle, StandardCharsets.UTF_8.toString())
+                                    navController.navigate("category/$encodedKey/$encodedTitle")
+                                },
+                                onSearchClick = {
+                                    currentTab = CineNavTab.SEARCH
+                                },
+                                onProfileClick = {
+                                    currentTab = CineNavTab.PROFILE
+                                },
+                                isAdminLoggedIn = isAdminLoggedIn,
+                                uploadedMovies = uploadedMovies,
+                                onUploadClick = {
+                                    showAdminUploadDialog = true
+                                }
+                            )
+                        }
+
+                        CineNavTab.SEARCH -> {
+                            SearchScreen(
+                                query = searchQuery,
+                                onQueryChange = { viewModel.updateSearchQuery(it) },
+                                selectedGenre = selectedGenreFilter,
+                                onSelectGenre = { viewModel.selectGenreFilter(it) },
+                                searchResults = searchResults,
+                                recentSearches = recentSearches,
+                                onSelectRecentSearch = { term -> viewModel.addRecentSearch(term) },
+                                onRemoveRecentSearch = { term -> viewModel.removeRecentSearch(term) },
+                                onClearRecentSearches = { viewModel.clearRecentSearches() },
+                                onMovieClick = { movie ->
+                                    navController.navigate("details/${movie.id}")
+                                },
+                                isSearchingTmdb = isSearchingTmdb,
+                                isTmdbLive = viewModel.isTmdbLiveConfigured
+                            )
+                        }
+
+                        CineNavTab.MY_LIST -> {
+                            MyListScreen(
+                                movies = watchlistMovies,
+                                onMovieClick = { movie ->
+                                    navController.navigate("details/${movie.id}")
+                                },
+                                onDiscoverClick = {
+                                    currentTab = CineNavTab.HOME
+                                }
+                            )
+                        }
+
+                        CineNavTab.PROFILE -> {
+                            ProfileScreen(
+                                onReplayOnboarding = {
+                                    viewModel.resetOnboarding()
+                                    navController.navigate("onboarding")
+                                },
+                                isTmdbLive = viewModel.isTmdbLiveConfigured,
+                                isAdminLoggedIn = isAdminLoggedIn,
+                                uploadedMoviesCount = uploadedMovies.size,
+                                onAdminLoginClick = {
+                                    showAdminLoginDialog = true
+                                },
+                                onAdminLogoutClick = {
+                                    viewModel.logoutAdmin()
+                                },
+                                onUploadMovieClick = {
+                                    showAdminUploadDialog = true
+                                },
+                                isGoogleSignedIn = isGoogleSignedIn,
+                                isFirestoreSynced = isFirestoreSynced,
+                                userDisplayName = userDisplayName,
+                                userEmail = userEmail,
+                                userPhotoUrl = userPhotoUrl,
+                                firestoreUsers = firestoreUsers,
+                                isLoadingFirestoreUsers = isLoadingFirestoreUsers,
+                                onRefreshFirestoreUsers = {
+                                    viewModel.loadFirestoreUsers(context)
+                                },
+                                onGoogleAuthClick = {
+                                    navController.navigate("auth")
+                                },
+                                onSignOutGoogleClick = {
+                                    viewModel.signOutGoogle()
+                                }
+                            )
+                        }
+                    }
+
+                    // Admin Authentication Dialog
+                    if (showAdminLoginDialog) {
+                        AdminLoginDialog(
+                            onDismiss = { showAdminLoginDialog = false },
+                            onLogin = { passcode ->
+                                viewModel.loginAdmin(passcode)
+                            }
+                        )
+                    }
+
+                    // Admin Cloudflare R2 Upload Movie Dialog
+                    if (showAdminUploadDialog) {
+                        AdminUploadMovieDialog(
+                            viewModel = viewModel,
+                            onDismiss = { showAdminUploadDialog = false }
+                        )
+                    }
+                }
+            }
+        }
+
+        // Movie Details Screen
+        composable(
+            route = "details/{movieId}",
+            arguments = listOf(navArgument("movieId") { type = NavType.StringType }),
+            enterTransition = {
+                slideIntoContainer(
+                    AnimatedContentTransitionScope.SlideDirection.Start,
+                    animationSpec = tween(350)
+                )
+            },
+            exitTransition = {
+                slideOutOfContainer(
+                    AnimatedContentTransitionScope.SlideDirection.End,
+                    animationSpec = tween(300)
+                )
+            }
+        ) { backStackEntry ->
+            val movieId = backStackEntry.arguments?.getString("movieId") ?: ""
+            val dynamicMovies by viewModel.dynamicMovies.collectAsState()
+            val movie = dynamicMovies[movieId] ?: viewModel.getMovieById(movieId)
+            if (movie != null) {
+                val isInWatchlist = viewModel.isMovieInWatchlist(movie.id)
+                MovieDetailsScreen(
+                    movie = movie,
+                    isInWatchlist = isInWatchlist,
+                    onToggleWatchlist = { viewModel.toggleWatchlist(movie) },
+                    onWatchClick = {
+                        navController.navigate("player/${movie.id}/false")
+                    },
+                    onTrailerClick = {
+                        navController.navigate("player/${movie.id}/true")
+                    },
+                    onRelatedMovieClick = { rec ->
+                        navController.navigate("details/${rec.id}")
+                    },
+                    onBackClick = { navController.popBackStack() }
+                )
+            } else {
+                viewModel.fetchTmdbMovieById(movieId)
+            }
+        }
+
+        // Video Player Screen
+        composable(
+            route = "player/{movieId}/{isTrailer}",
+            arguments = listOf(
+                navArgument("movieId") { type = NavType.StringType },
+                navArgument("isTrailer") { type = NavType.BoolType; defaultValue = false }
+            ),
+            enterTransition = { fadeIn(animationSpec = tween(400)) },
+            exitTransition = { fadeOut(animationSpec = tween(300)) }
+        ) { backStackEntry ->
+            val movieId = backStackEntry.arguments?.getString("movieId") ?: ""
+            val isTrailer = backStackEntry.arguments?.getBoolean("isTrailer") ?: false
+            val movie = viewModel.getMovieById(movieId)
+            if (movie != null) {
+                VideoPlayerScreen(
+                    movie = movie,
+                    isTrailer = isTrailer,
+                    onBackClick = { navController.popBackStack() },
+                    onSaveProgress = { position, total ->
+                        viewModel.recordWatchProgress(movie.id, position, total)
+                    }
+                )
+            }
+        }
+
+        // Category Detail Screen ("See All")
+        composable(
+            route = "category/{categoryKey}/{categoryTitle}",
+            arguments = listOf(
+                navArgument("categoryKey") { type = NavType.StringType },
+                navArgument("categoryTitle") { type = NavType.StringType }
+            ),
+            enterTransition = {
+                slideIntoContainer(
+                    AnimatedContentTransitionScope.SlideDirection.Start,
+                    animationSpec = tween(350)
+                )
+            },
+            exitTransition = {
+                slideOutOfContainer(
+                    AnimatedContentTransitionScope.SlideDirection.End,
+                    animationSpec = tween(300)
+                )
+            }
+        ) { backStackEntry ->
+            val categoryKey = URLDecoder.decode(
+                backStackEntry.arguments?.getString("categoryKey") ?: "",
+                StandardCharsets.UTF_8.toString()
+            )
+            val categoryTitle = URLDecoder.decode(
+                backStackEntry.arguments?.getString("categoryTitle") ?: "",
+                StandardCharsets.UTF_8.toString()
+            )
+            val movies = SampleMovies.getMoviesForCategory(categoryKey)
+            CategoryDetailScreen(
+                categoryTitle = categoryTitle,
+                movies = movies,
+                onMovieClick = { movie ->
+                    navController.navigate("details/${movie.id}")
+                },
+                onBackClick = { navController.popBackStack() }
+            )
+        }
+    }
+}
