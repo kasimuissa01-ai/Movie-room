@@ -270,11 +270,10 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         _isAdminLoggedIn.value = false
     }
 
-    // Google Sign-In with Account Picker & Firebase Firestore Sync
+    // Direct Seamless Google OAuth with Firebase Firestore Sync
     fun signInWithGoogleDirect(
         context: Context,
         serverClientId: String? = null,
-        onNeedsAccountSelection: (List<String>) -> Unit = {},
         onComplete: (Boolean, String) -> Unit = { _, _ -> }
     ) {
         viewModelScope.launch {
@@ -287,14 +286,11 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     is GoogleAuthResult.Success -> {
                         applyAuthenticatedUser(context, result.user, onComplete)
                     }
-                    is GoogleAuthResult.NeedsManualAccountSelection -> {
-                        onNeedsAccountSelection(result.deviceAccounts)
-                    }
                     is GoogleAuthResult.Error -> {
                         onComplete(false, result.message)
                     }
                     is GoogleAuthResult.Cancelled -> {
-                        onComplete(false, "Account selection cancelled")
+                        onComplete(false, "Cancelled")
                     }
                 }
             } catch (e: Exception) {
@@ -325,9 +321,6 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     is GoogleAuthResult.Error -> {
                         onComplete(false, result.message)
-                    }
-                    is GoogleAuthResult.NeedsManualAccountSelection -> {
-                        onComplete(false, "Please select an account")
                     }
                     is GoogleAuthResult.Cancelled -> {
                         onComplete(false, "Cancelled")

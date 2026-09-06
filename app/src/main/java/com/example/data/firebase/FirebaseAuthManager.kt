@@ -1,7 +1,8 @@
 package com.example.data.firebase
 
-import android.accounts.AccountManager
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.util.Log
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
@@ -51,7 +52,6 @@ data class FirestoreUserRecord(
 sealed class GoogleAuthResult {
     data class Success(val user: AuthUser) : GoogleAuthResult()
     data class Error(val message: String) : GoogleAuthResult()
-    data class NeedsManualAccountSelection(val deviceAccounts: List<String>) : GoogleAuthResult()
     object Cancelled : GoogleAuthResult()
 }
 
@@ -60,6 +60,12 @@ object FirebaseAuthManager {
     const val PROJECT_ID = "movieroom-334fb"
     const val PROJECT_NUMBER = "791839339295"
     const val WEB_CLIENT_ID = "791839339295-hrvsao6av3ndccilkflg855gdn8fpkpp.apps.googleusercontent.com"
+
+    private tailrec fun Context.findActivity(): Activity? = when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.findActivity()
+        else -> null
+    }
 
     fun getFirebaseAuth(context: Context): FirebaseAuth? {
         return try {
@@ -86,100 +92,48 @@ object FirebaseAuthManager {
     }
 
     /**
-     * Gets all Google accounts present on the device
-     */
-    fun getDeviceGoogleAccounts(context: Context): List<String> {
-        return try {
-            val accountManager = AccountManager.get(context)
-            val accounts = accountManager.getAccountsByType("com.google")
-            accounts.mapNotNull { it.name }.distinct()
-        } catch (e: Throwable) {
-            Log.w(TAG, "Device account read: ${e.message}")
-            emptyList()
-        }
-    }
-
-    /**
-     * Attempts Google Credential Manager first. If no credentials or Web Client ID is configured,
-     * returns NeedsManualAccountSelection or prompts for real user details.
+     * Direct seamless Google OAuth using AuthenticationManager and Credential Manager.
+     * Launches the native Android Google Account picker and authenticates with Firebase.
      */
     suspend fun signInWithGoogleAccountPicker(
         context: Context,
         serverClientId: String? = null
-    ): GoogleAuthResult = withContext(Dispatchers.IO) {
-        val deviceAccounts = getDeviceGoogleAccounts(context)
-
+    ): GoogleAuthResult = withContext(Dispatchers.Main) {
         val effectiveClientId = serverClientId?.takeIf { it.isNotBlank() } ?: WEB_CLIENT_ID
+        val authManager = AuthenticationManager(context, effectiveClientId)
 
-        // 1. Try Android CredentialManager if a valid Web Client ID is provided
-        if (effectiveClientId.isNotBlank()) {
-            try {
-                val credentialManager = CredentialManager.create(context)
-                val rawNonce = UUID.randomUUID().toString()
-                val md = MessageDigest.getInstance("SHA-256")
-                val digest = md.digest(rawNonce.toByteArray())
-                val hashedNonce = digest.fold("") { str, it -> str + "%02x".format(it) }
-
-                val googleIdOption = GetGoogleIdOption.Builder()
-                    .setFilterByAuthorizedAccounts(false)
-                    .setServerClientId(effectiveClientId)
-                    .setAutoSelectEnabled(false)
-                    .setNonce(hashedNonce)
-                    .build()
-
-                val request = GetCredentialRequest.Builder()
-                    .addCredentialOption(googleIdOption)
-                    .build()
-
-                val result: GetCredentialResponse = credentialManager.getCredential(
-                    request = request,
-                    context = context
-                )
-
-                val credential = result.credential
-                if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                    val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
-                    val idToken = googleIdTokenCredential.idToken
-                    val email = googleIdTokenCredential.id
-                    val displayName = googleIdTokenCredential.displayName ?: email.substringBefore("@")
-                    val photoUrl = googleIdTokenCredential.profilePictureUri?.toString() ?: ""
-
-                    val firebaseAuth = getFirebaseAuth(context)
-                    if (firebaseAuth != null && idToken.isNotBlank()) {
-                        try {
-                            val authCredential = GoogleAuthProvider.getCredential(idToken, null)
-                            val authResult = suspendCancellableCoroutine { continuation ->
-                                firebaseAuth.signInWithCredential(authCredential)
-                                    .addOnSuccessListener { continuation.resume(it.user) }
-                                    .addOnFailureListener { continuation.resumeWithException(it) }
-                            }
-                            val user = authResult ?: firebaseAuth.currentUser
-                            if (user != null) {
-                                val syncedUser = syncUserToFirestore(context, user)
-                                return@withContext GoogleAuthResult.Success(syncedUser)
-                            }
-                        } catch (authErr: Throwable) {
-                            Log.w(TAG, "Firebase credential sign-in error: ${authErr.message}")
+        when (val authResult = authManager.signInWithGoogle()) {
+            is AuthResult.Success -> {
+                val firebaseAuth = getFirebaseAuth(context)
+                if (firebaseAuth != null && authResult.idToken.isNotBlank()) {
+                    try {
+                        val authCredential = GoogleAuthProvider.getCredential(authResult.idToken, null)
+                        val authUserResult = suspendCancellableCoroutine<FirebaseUser?> { continuation ->
+                            firebaseAuth.signInWithCredential(authCredential)
+                                .addOnSuccessListener { continuation.resume(it.user) }
+                                .addOnFailureListener { continuation.resumeWithException(it) }
                         }
+                        val user = authUserResult ?: firebaseAuth.currentUser
+                        if (user != null) {
+                            val syncedUser = syncUserToFirestore(context, user)
+                            return@withContext GoogleAuthResult.Success(syncedUser)
+                        }
+                    } catch (authErr: Throwable) {
+                        Log.w(TAG, "Firebase credential sign-in error: ${authErr.message}")
                     }
-
-                    // Fallback sync with extracted Google account info
-                    return@withContext signInWithAccountDetails(
-                        context = context,
-                        email = email,
-                        displayName = displayName,
-                        photoUrl = photoUrl
-                    )
                 }
-            } catch (e: GetCredentialCancellationException) {
-                return@withContext GoogleAuthResult.Cancelled
-            } catch (e: Throwable) {
-                Log.i(TAG, "Credential Manager: ${e.message}, showing account picker")
-            }
-        }
 
-        // 2. Return device accounts list for account picker dialog
-        return@withContext GoogleAuthResult.NeedsManualAccountSelection(deviceAccounts)
+                // Sync user with extracted details
+                signInWithAccountDetails(
+                    context = context,
+                    email = authResult.email,
+                    displayName = authResult.displayName,
+                    photoUrl = authResult.profilePictureUri ?: ""
+                )
+            }
+            is AuthResult.Cancelled -> GoogleAuthResult.Cancelled
+            is AuthResult.Error -> GoogleAuthResult.Error(authResult.message)
+        }
     }
 
     /**
