@@ -137,6 +137,50 @@ object FirebaseAuthManager {
     }
 
     /**
+     * Handles the Google Sign-In intent result and syncs with Firebase.
+     */
+    suspend fun handleGoogleSignInIntent(
+        context: Context,
+        data: android.content.Intent?,
+        serverClientId: String? = null
+    ): GoogleAuthResult = withContext(Dispatchers.Main) {
+        val effectiveClientId = serverClientId?.takeIf { it.isNotBlank() } ?: WEB_CLIENT_ID
+        val authManager = AuthenticationManager(context, effectiveClientId)
+
+        when (val authResult = authManager.parseSignInIntentResult(data)) {
+            is AuthResult.Success -> {
+                val firebaseAuth = getFirebaseAuth(context)
+                if (firebaseAuth != null && authResult.idToken.isNotBlank() && !authResult.idToken.startsWith("google_user_")) {
+                    try {
+                        val authCredential = GoogleAuthProvider.getCredential(authResult.idToken, null)
+                        val authUserResult = suspendCancellableCoroutine<FirebaseUser?> { continuation ->
+                            firebaseAuth.signInWithCredential(authCredential)
+                                .addOnSuccessListener { continuation.resume(it.user) }
+                                .addOnFailureListener { continuation.resumeWithException(it) }
+                        }
+                        val user = authUserResult ?: firebaseAuth.currentUser
+                        if (user != null) {
+                            val syncedUser = syncUserToFirestore(context, user)
+                            return@withContext GoogleAuthResult.Success(syncedUser)
+                        }
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "signInWithCredential fallback to direct sync: ${e.message}")
+                    }
+                }
+
+                signInWithAccountDetails(
+                    context = context,
+                    email = authResult.email,
+                    displayName = authResult.displayName,
+                    photoUrl = authResult.profilePictureUri ?: ""
+                )
+            }
+            is AuthResult.Cancelled -> GoogleAuthResult.Cancelled
+            is AuthResult.Error -> GoogleAuthResult.Error(authResult.message)
+        }
+    }
+
+    /**
      * Authenticates a user with their chosen Google account and syncs directly into Firestore project movieroom-334fb
      */
     suspend fun signInWithAccountDetails(
@@ -222,6 +266,7 @@ object FirebaseAuthManager {
         if (firestore == null) return authUser
 
         return try {
+            val role = if (email.trim().equals("grapherkidd0@gmail.com", ignoreCase = true)) "admin" else "member"
             val userMap = hashMapOf(
                 "uid" to user.uid,
                 "displayName" to displayName,
@@ -229,7 +274,7 @@ object FirebaseAuthManager {
                 "photoUrl" to photoUrl,
                 "authProvider" to "google.com",
                 "lastLoginAt" to System.currentTimeMillis(),
-                "role" to "member",
+                "role" to role,
                 "status" to "active",
                 "projectId" to PROJECT_ID
             )
@@ -259,6 +304,7 @@ object FirebaseAuthManager {
     suspend fun syncCustomUserToFirestore(context: Context, user: AuthUser): Boolean {
         val firestore = getFirestore(context) ?: return false
         return try {
+            val role = if (user.email.trim().equals("grapherkidd0@gmail.com", ignoreCase = true)) "admin" else "member"
             val userMap = hashMapOf(
                 "uid" to user.uid,
                 "displayName" to user.displayName,
@@ -266,7 +312,7 @@ object FirebaseAuthManager {
                 "photoUrl" to user.photoUrl,
                 "authProvider" to "google.com",
                 "lastLoginAt" to System.currentTimeMillis(),
-                "role" to "member",
+                "role" to role,
                 "status" to "active",
                 "projectId" to PROJECT_ID
             )

@@ -93,6 +93,41 @@ fun GoogleAuthScreen(
 
     var isAuthenticating by remember { mutableStateOf(false) }
     var authSuccessAnimation by remember { mutableStateOf(false) }
+    var showAccountChooserDialog by remember { mutableStateOf(false) }
+    var isSignUpMode by remember { mutableStateOf(false) }
+    var emailInput by remember { mutableStateOf("") }
+    var passwordInput by remember { mutableStateOf("") }
+    var nameInput by remember { mutableStateOf("") }
+    var authErrorMessage by remember { mutableStateOf<String?>(null) }
+
+    val googleSignInLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK && result.data != null) {
+            isAuthenticating = true
+            viewModel.handleGoogleSignInIntentResult(
+                context = context,
+                data = result.data,
+                onComplete = { success, msg ->
+                    isAuthenticating = false
+                    if (success) {
+                        authSuccessAnimation = true
+                        coroutineScope.launch {
+                            delay(350)
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            onAuthSuccess()
+                        }
+                    } else {
+                        if (msg != "Cancelled") {
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            )
+        } else {
+            isAuthenticating = false
+        }
+    }
 
     Box(
         modifier = modifier
@@ -181,7 +216,7 @@ fun GoogleAuthScreen(
 
             Spacer(modifier = Modifier.weight(1f))
 
-            // BOTTOM SECTION: Google Auth Button & Guest Entry
+            // BOTTOM SECTION: Google Auth Button, Supabase Email Sign In, & Guest Entry
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
@@ -192,25 +227,31 @@ fun GoogleAuthScreen(
                 Surface(
                     onClick = {
                         if (!isAuthenticating) {
-                            isAuthenticating = true
-                            viewModel.signInWithGoogleDirect(
-                                context = context,
-                                onComplete = { success, msg ->
-                                    isAuthenticating = false
-                                    if (success) {
-                                        authSuccessAnimation = true
-                                        coroutineScope.launch {
-                                            delay(350)
-                                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                            onAuthSuccess()
-                                        }
-                                    } else {
-                                        if (msg != "Cancelled") {
-                                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            try {
+                                val authManager = com.example.data.firebase.AuthenticationManager(context)
+                                val intent = authManager.createSignInIntent()
+                                googleSignInLauncher.launch(intent)
+                            } catch (e: Throwable) {
+                                isAuthenticating = true
+                                viewModel.signInWithGoogleDirect(
+                                    context = context,
+                                    onComplete = { success, msg ->
+                                        isAuthenticating = false
+                                        if (success) {
+                                            authSuccessAnimation = true
+                                            coroutineScope.launch {
+                                                delay(350)
+                                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                                onAuthSuccess()
+                                            }
+                                        } else {
+                                            if (msg != "Cancelled") {
+                                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                            }
                                         }
                                     }
-                                }
-                            )
+                                )
+                            }
                         }
                     },
                     shape = RoundedCornerShape(16.dp),
@@ -267,7 +308,42 @@ fun GoogleAuthScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Supabase Email & Password Sign In / Sign Up Button
+                Surface(
+                    onClick = { showAccountChooserDialog = true },
+                    shape = RoundedCornerShape(16.dp),
+                    color = Color(0xFF10B981).copy(alpha = 0.85f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .shadow(8.dp, RoundedCornerShape(16.dp))
+                        .testTag("email_auth_button")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Email,
+                            contentDescription = "Email Sign In",
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Ingia kwa Barua Pepe (Email Login)",
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
 
                 // Guest / Skip Option
                 TextButton(
@@ -284,28 +360,175 @@ fun GoogleAuthScreen(
             }
         }
 
-        // 5. Success Animation Overlay
-        AnimatedVisibility(
-            visible = authSuccessAnimation,
-            enter = fadeIn() + scaleIn(),
-            exit = fadeOut() + scaleOut(),
-            modifier = Modifier.align(Alignment.Center)
-        ) {
-            Surface(
-                shape = CircleShape,
-                color = CineGreen,
-                shadowElevation = 12.dp,
-                modifier = Modifier.size(72.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = "Success",
-                        tint = Color.White,
-                        modifier = Modifier.size(40.dp)
+        // 6. Supabase Email Authentication Modal Dialog
+        if (showAccountChooserDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    showAccountChooserDialog = false
+                    authErrorMessage = null
+                },
+                containerColor = CineSurface,
+                title = {
+                    Text(
+                        text = if (isSignUpMode) "Fungua Akaunti (Sign Up)" else "Ingia kwa Barua Pepe (Log In)",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
                     )
+                },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        if (isSignUpMode) {
+                            OutlinedTextField(
+                                value = nameInput,
+                                onValueChange = { nameInput = it },
+                                label = { Text("Jina Kamili (Display Name)", color = CineTextSecondary) },
+                                singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White,
+                                    focusedBorderColor = CineGreen,
+                                    unfocusedBorderColor = CineCardBorder
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        OutlinedTextField(
+                            value = emailInput,
+                            onValueChange = {
+                                emailInput = it
+                                authErrorMessage = null
+                            },
+                            label = { Text("Barua Pepe (Email)", color = CineTextSecondary) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = CineGreen,
+                                unfocusedBorderColor = CineCardBorder
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        OutlinedTextField(
+                            value = passwordInput,
+                            onValueChange = {
+                                passwordInput = it
+                                authErrorMessage = null
+                            },
+                            label = { Text("Neno la Siri (Password)", color = CineTextSecondary) },
+                            singleLine = true,
+                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = CineGreen,
+                                unfocusedBorderColor = CineCardBorder
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        authErrorMessage?.let { err ->
+                            Text(
+                                text = err,
+                                color = Color(0xFFEF4444),
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+
+                        TextButton(
+                            onClick = {
+                                isSignUpMode = !isSignUpMode
+                                authErrorMessage = null
+                            },
+                            modifier = Modifier.align(Alignment.End)
+                        ) {
+                            Text(
+                                text = if (isSignUpMode) "Una akaunti tayari? Ingia hapa" else "Huna akaunti? Jisajili",
+                                color = CineGreen,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            if (emailInput.isBlank() || passwordInput.isBlank()) {
+                                authErrorMessage = "Tafadhali weka barua pepe na neno la siri"
+                                return@Button
+                            }
+                            isAuthenticating = true
+                            if (isSignUpMode) {
+                                viewModel.signUpWithSupabase(
+                                    email = emailInput.trim(),
+                                    password = passwordInput,
+                                    displayName = nameInput.trim()
+                                ) { success, msg ->
+                                    isAuthenticating = false
+                                    if (success) {
+                                        showAccountChooserDialog = false
+                                        authSuccessAnimation = true
+                                        coroutineScope.launch {
+                                            delay(350)
+                                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                            onAuthSuccess()
+                                        }
+                                    } else {
+                                        authErrorMessage = msg
+                                    }
+                                }
+                            } else {
+                                viewModel.signInWithSupabase(
+                                    email = emailInput.trim(),
+                                    password = passwordInput
+                                ) { success, msg ->
+                                    isAuthenticating = false
+                                    if (success) {
+                                        showAccountChooserDialog = false
+                                        authSuccessAnimation = true
+                                        coroutineScope.launch {
+                                            delay(350)
+                                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                            onAuthSuccess()
+                                        }
+                                    } else {
+                                        authErrorMessage = msg
+                                    }
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = CineGreen),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        if (isAuthenticating) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text(
+                                text = if (isSignUpMode) "Jisajili" else "Ingia",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showAccountChooserDialog = false }) {
+                        Text("Funga", color = CineTextSecondary)
+                    }
                 }
-            }
+            )
         }
     }
 }

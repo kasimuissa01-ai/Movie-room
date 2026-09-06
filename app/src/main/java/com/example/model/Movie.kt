@@ -14,7 +14,7 @@ data class Movie(
     val genres: List<String>,
     val cast: List<CastMember>,
     val director: String,
-    val studio: String = "CineStream Studios",
+    val studio: String = "Movie Room Studios",
     val category: String,
     val featured: Boolean = false,
     val trending: Boolean = false,

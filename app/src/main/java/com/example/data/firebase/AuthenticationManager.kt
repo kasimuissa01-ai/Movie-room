@@ -12,6 +12,11 @@ import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialCustomException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
+import android.content.Intent
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
@@ -59,15 +64,6 @@ class AuthenticationManager(
     }
 
     /**
-     * Generates a SHA-256 hashed nonce for OAuth token request integrity.
-     */
-    private fun generateHashedNonce(): String {
-        val rawNonce = UUID.randomUUID().toString()
-        val bytes = MessageDigest.getInstance("SHA-256").digest(rawNonce.toByteArray())
-        return bytes.joinToString("") { "%02x".format(it) }
-    }
-
-    /**
      * Builds the Google ID Option and GetCredentialRequest.
      */
     private fun buildGoogleIdOption(
@@ -78,7 +74,6 @@ class AuthenticationManager(
             .setFilterByAuthorizedAccounts(filterByAuthorizedAccounts)
             .setServerClientId(serverClientId)
             .setAutoSelectEnabled(autoSelectEnabled)
-            .setNonce(generateHashedNonce())
             .build()
     }
 
@@ -188,5 +183,60 @@ class AuthenticationManager(
         }
 
         return AuthResult.Error("Unsupported credential type: ${credential.javaClass.simpleName}")
+    }
+
+    /**
+     * Creates GoogleSignIn Intent using standard Play Services Auth for 100% device compatibility.
+     */
+    fun createSignInIntent(): Intent {
+        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestIdToken(serverClientId)
+            .requestEmail()
+            .requestProfile()
+            .build()
+        val client = GoogleSignIn.getClient(context, gso)
+        return client.signInIntent
+    }
+
+    /**
+     * Parses the result intent from the Google Sign-In Activity.
+     */
+    fun parseSignInIntentResult(data: Intent?): AuthResult {
+        return try {
+            val task = GoogleSignIn.getSignedInAccountFromIntent(data)
+            val account: GoogleSignInAccount = task.getResult(ApiException::class.java)
+            val idToken = account.idToken ?: ""
+            val email = account.email ?: ""
+            val displayName = account.displayName ?: email.substringBefore("@")
+            val photoUrl = account.photoUrl?.toString()
+
+            if (idToken.isNotBlank()) {
+                AuthResult.Success(
+                    idToken = idToken,
+                    email = email,
+                    displayName = displayName,
+                    profilePictureUri = photoUrl
+                )
+            } else if (email.isNotBlank()) {
+                AuthResult.Success(
+                    idToken = "google_user_${account.id}",
+                    email = email,
+                    displayName = displayName,
+                    profilePictureUri = photoUrl
+                )
+            } else {
+                AuthResult.Error("No account information returned from Google")
+            }
+        } catch (e: ApiException) {
+            Log.e(TAG, "GoogleSignIn ApiException: status code=${e.statusCode}, message=${e.message}")
+            if (e.statusCode == 12501) {
+                AuthResult.Cancelled
+            } else {
+                AuthResult.Error("Google Sign-In failed (status code ${e.statusCode})", e)
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "GoogleSignIn parse error: ${e.message}", e)
+            AuthResult.Error(e.localizedMessage ?: "Failed to sign in with Google", e)
+        }
     }
 }

@@ -91,8 +91,10 @@ fun AdminUploadMovieDialog(
     var rating by remember { mutableStateOf("8.8") }
 
     var selectedVideoUri by remember { mutableStateOf<Uri?>(null) }
+    var selectedTrailerUri by remember { mutableStateOf<Uri?>(null) }
     var selectedPosterUri by remember { mutableStateOf<Uri?>(null) }
     var directVideoUrl by remember { mutableStateOf("https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4") }
+    var directTrailerUrl by remember { mutableStateOf("") }
     var directPosterUrl by remember { mutableStateOf("https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=800&q=80") }
 
     val isUploading = viewModel.isUploading.value
@@ -108,6 +110,15 @@ fun AdminUploadMovieDialog(
     ) { uri: Uri? ->
         if (uri != null) {
             selectedVideoUri = uri
+        }
+    }
+
+    // Short trailer media picker
+    val trailerPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            selectedTrailerUri = uri
         }
     }
 
@@ -454,6 +465,75 @@ fun AdminUploadMovieDialog(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
+                    // Section: Trailer Video (Short preview)
+                    Text(
+                        text = "Movie Trailer (Short Preview Video)",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = CineTextPrimary
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                trailerPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+                                )
+                            },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = CineSurface),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (selectedTrailerUri != null) CineGreen else Color(0x33FFFFFF)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if (selectedTrailerUri != null) Icons.Default.CheckCircle else Icons.Default.Videocam,
+                                contentDescription = null,
+                                tint = if (selectedTrailerUri != null) CineGreen else CineGold,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (selectedTrailerUri != null) "Trailer Video Selected" else "Pick Short Trailer Video (MP4/MKV)",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = CineTextPrimary
+                                )
+                                Text(
+                                    text = if (selectedTrailerUri != null) selectedTrailerUri?.lastPathSegment ?: "Ready to upload" else "Short teaser / preview that auto-plays on movie page",
+                                    fontSize = 11.sp,
+                                    color = CineTextMuted,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedTextField(
+                        value = directTrailerUrl,
+                        onValueChange = { directTrailerUrl = it },
+                        label = { Text("Or Direct Trailer Streaming URL") },
+                        placeholder = { Text("https://pub-xxx.r2.dev/trailers/trailer.mp4") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = outlinedFieldColors()
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
                     // Section: Poster Image
                     Text(
                         text = "Movie Poster Artwork",
@@ -597,8 +677,10 @@ fun AdminUploadMovieDialog(
                                 rating = parsedRating,
                                 videoUri = selectedVideoUri,
                                 posterUri = selectedPosterUri,
+                                trailerUri = selectedTrailerUri,
                                 directVideoUrl = directVideoUrl,
-                                directPosterUrl = directPosterUrl
+                                directPosterUrl = directPosterUrl,
+                                directTrailerUrl = directTrailerUrl
                             ) { success, message ->
                                 Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                                 if (success) {

@@ -17,9 +17,20 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -40,7 +51,11 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.model.Movie
 import com.example.ui.theme.CineBlack
+import com.example.ui.theme.CineCardBorder
+import com.example.ui.theme.CineGold
+import com.example.ui.theme.CineGreen
 import com.example.ui.theme.CineRedPrimary
+import com.example.ui.theme.CineSurfaceElevated
 import com.example.ui.theme.CineTextMuted
 import com.example.ui.theme.CineTextPrimary
 import com.example.ui.theme.CineTextSecondary
@@ -52,7 +67,10 @@ fun HeroCarousel(
     onMovieClick: (Movie) -> Unit,
     onWatchClick: (Movie) -> Unit,
     modifier: Modifier = Modifier,
-    height: Int = 480
+    height: Int = 490,
+    onDownloadClick: (Movie) -> Unit = {},
+    isMovieDownloaded: (String) -> Boolean = { false },
+    downloadProgress: (String) -> Int? = { null }
 ) {
     if (movies.isEmpty()) return
 
@@ -186,24 +204,139 @@ fun HeroCarousel(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Buttons: [ Watch Now ] [ More Info ]
+                    // Action Buttons: [ Watch Now ] and [ Download ] with status card & details info
+                    val isDownloaded = isMovieDownloaded(movie.id)
+                    val progress = downloadProgress(movie.id)
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // 1. WATCH NOW / PLAY
                         PrimaryButton(
-                            text = "Watch Now",
+                            text = if (isDownloaded) "Watch Offline" else "Watch Now",
                             icon = Icons.Default.PlayArrow,
                             onClick = { onWatchClick(movie) },
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1.1f),
                             testTag = "hero_watch_button"
                         )
-                        SecondaryButton(
-                            text = "More Info",
-                            icon = Icons.Default.Info,
+
+                        // 2. DOWNLOAD ACTION BUTTON / STATUS CARD (Directly facilitates downloading)
+                        if (progress != null && progress in 0..99) {
+                            Card(
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, CineGold.copy(alpha = 0.6f)),
+                                colors = CardDefaults.cardColors(containerColor = CineSurfaceElevated),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("hero_downloading_${movie.id}")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    CircularProgressIndicator(
+                                        progress = { progress / 100f },
+                                        modifier = Modifier.size(16.dp),
+                                        color = CineGold,
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "$progress%",
+                                        color = CineGold,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        } else if (isDownloaded) {
+                            Card(
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, CineGreen.copy(alpha = 0.6f)),
+                                colors = CardDefaults.cardColors(containerColor = CineSurfaceElevated),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .clickable { onWatchClick(movie) }
+                                    .testTag("hero_downloaded_${movie.id}")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = CineGreen,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Offline",
+                                        color = CineGreen,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        } else {
+                            SecondaryButton(
+                                text = "Download",
+                                icon = Icons.Default.Download,
+                                onClick = { onDownloadClick(movie) },
+                                modifier = Modifier.weight(1f),
+                                testTag = "hero_download_button"
+                            )
+                        }
+
+                        // 3. Compact Info button to view full movie details & synopsis
+                        IconButton(
                             onClick = { onMovieClick(movie) },
-                            modifier = Modifier.weight(1f),
-                            testTag = "hero_more_info_button"
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(CineSurfaceElevated)
+                                .border(BorderStroke(1.dp, CineCardBorder), RoundedCornerShape(12.dp))
+                                .testTag("hero_more_info_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "More Info",
+                                tint = CineTextSecondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Reassurance note: in-app private download, never in phone gallery
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        modifier = Modifier.padding(start = 2.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = null,
+                            tint = CineGold,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(
+                            text = "Private In-App Download • Saved in Downloads tab (never in phone gallery)",
+                            color = CineTextMuted,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }

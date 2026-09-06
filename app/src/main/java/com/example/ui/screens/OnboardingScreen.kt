@@ -228,7 +228,7 @@ fun OnboardingScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Primary Action Button: Immediately finishes onboarding and enters CineStream
+            // Primary Action Button: Immediately finishes onboarding and enters Movie Room
             Button(
                 onClick = onFinished,
                 modifier = Modifier
@@ -246,7 +246,7 @@ fun OnboardingScreen(
                     horizontalArrangement = Arrangement.Center
                 ) {
                     Text(
-                        text = if (pagerState.currentPage == pages.size - 1) "Get Started" else "Continue to CineStream",
+                        text = if (pagerState.currentPage == pages.size - 1) "Get Started" else "Continue to Movie Room",
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold
                     )

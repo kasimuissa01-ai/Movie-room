@@ -59,7 +59,10 @@ fun HomeScreen(
     modifier: Modifier = Modifier,
     isAdminLoggedIn: Boolean = false,
     uploadedMovies: List<Movie> = emptyList(),
-    onUploadClick: () -> Unit = {}
+    onUploadClick: () -> Unit = {},
+    onDownloadClick: (Movie) -> Unit = {},
+    downloadedMovieIds: Set<String> = emptySet(),
+    downloadProgressMap: Map<String, Int> = emptyMap()
 ) {
     val scrollState = rememberLazyListState()
 
@@ -73,12 +76,15 @@ fun HomeScreen(
             state = scrollState,
             modifier = Modifier.fillMaxSize()
         ) {
-            // Hero Carousel at top
+            // Hero Carousel at top with integrated Watch Now and Download action cards
             item(key = "hero_carousel") {
                 HeroCarousel(
                     movies = (uploadedMovies.take(1) + featuredMovies).distinctBy { it.id },
                     onMovieClick = onMovieClick,
-                    onWatchClick = onWatchClick
+                    onWatchClick = onWatchClick,
+                    onDownloadClick = onDownloadClick,
+                    isMovieDownloaded = { movieId -> downloadedMovieIds.contains(movieId) },
+                    downloadProgress = { movieId -> downloadProgressMap[movieId] }
                 )
             }
 

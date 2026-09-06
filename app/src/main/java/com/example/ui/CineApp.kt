@@ -10,15 +10,22 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -26,10 +33,13 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.data.SampleMovies
 import com.example.ui.components.AdminLoginDialog
+import com.example.ui.components.AdminReleasePublisherDialog
 import com.example.ui.components.AdminUploadMovieDialog
+import com.example.ui.components.AppUpdateDialog
 import com.example.ui.navigation.CineBottomBar
 import com.example.ui.navigation.CineNavTab
 import com.example.ui.screens.CategoryDetailScreen
+import com.example.ui.screens.DownloadsScreen
 import com.example.ui.screens.GoogleAuthScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.MovieDetailsScreen
@@ -45,7 +55,9 @@ import java.nio.charset.StandardCharsets
 
 @Composable
 fun CineApp(
-    viewModel: MovieViewModel = viewModel()
+    viewModel: MovieViewModel = viewModel(),
+    notificationPayload: com.example.NotificationPayload? = null,
+    onClearNotificationPayload: () -> Unit = {}
 ) {
     val navController = rememberNavController()
     val onboardingCompleted by viewModel.onboardingCompleted.collectAsState()
@@ -67,12 +79,51 @@ fun CineApp(
     val firestoreUsers by viewModel.firestoreUsers.collectAsState()
     val isLoadingFirestoreUsers by viewModel.isLoadingFirestoreUsers.collectAsState()
 
+    // Offline Downloads State
+    val downloadedMovies by viewModel.downloadedMovies.collectAsState()
+    val downloadProgressMap by viewModel.downloadProgressMap.collectAsState()
+
+    // Network & Room Offline Cache State
+    val isOnline by viewModel.isOnline.collectAsState()
+    val cachedMoviesCount by viewModel.cachedMoviesCount.collectAsState()
+    val cachedMovies by viewModel.cachedMovies.collectAsState()
+
+    // OTA Auto-Update State
+    val appUpdateInfo by viewModel.appUpdateInfo.collectAsState()
+    val updateDownloadProgress by viewModel.updateDownloadProgress.collectAsState()
+    val showUpdateDialog by viewModel.showUpdateDialog.collectAsState()
+    val showAdminReleasePublisher by viewModel.showAdminReleasePublisher.collectAsState()
+    val isPublishingRelease by viewModel.isPublishingRelease.collectAsState()
+
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     var showAdminLoginDialog by remember { mutableStateOf(false) }
     var showAdminUploadDialog by remember { mutableStateOf(false) }
 
     var currentTab by remember { mutableStateOf(CineNavTab.HOME) }
+
+    // Respond to Push Notification Deep Links (tap on notification or notification actions)
+    LaunchedEffect(notificationPayload) {
+        val payload = notificationPayload ?: return@LaunchedEffect
+        val movieId = payload.movieId
+        val action = payload.action
+
+        if (!movieId.isNullOrBlank()) {
+            when (action) {
+                com.example.notification.MovieNotificationHelper.ACTION_PLAY -> {
+                    navController.navigate("player/$movieId/false")
+                }
+                else -> {
+                    navController.navigate("details/$movieId")
+                }
+            }
+        } else if (action == com.example.notification.MovieNotificationHelper.ACTION_EXPLORE) {
+            currentTab = CineNavTab.HOME
+        }
+        onClearNotificationPayload()
+    }
 
     val startDestination = rememberSaveable {
         when {
@@ -124,11 +175,13 @@ fun CineApp(
         // Main App with Bottom Navigation
         composable("main") {
             Scaffold(
+                snackbarHost = { SnackbarHost(snackbarHostState) },
                 bottomBar = {
                     CineBottomBar(
                         currentTab = currentTab,
                         onTabSelected = { tab -> currentTab = tab },
-                        watchListCount = watchlistMovies.size
+                        watchListCount = watchlistMovies.size,
+                        downloadCount = downloadedMovies.size
                     )
                 },
                 containerColor = CineBlack,
@@ -150,13 +203,28 @@ fun CineApp(
                                 onWatchClick = { movie ->
                                     navController.navigate("player/${movie.id}/false")
                                 },
+                                onDownloadClick = { movie ->
+                                    viewModel.startMovieDownload(movie, context)
+                                    coroutineScope.launch {
+                                        val result = snackbarHostState.showSnackbar(
+                                            message = "Saving \"${movie.title}\" to private in-app storage (not in phone gallery).",
+                                            actionLabel = "View",
+                                            duration = SnackbarDuration.Short
+                                        )
+                                        if (result == SnackbarResult.ActionPerformed) {
+                                            currentTab = CineNavTab.DOWNLOADS
+                                        }
+                                    }
+                                },
+                                downloadedMovieIds = downloadedMovies.filter { it.downloadStatus == "COMPLETED" }.map { it.movieId }.toSet(),
+                                downloadProgressMap = downloadProgressMap,
                                 onSeeAllClick = { categoryKey, categoryTitle ->
                                     val encodedKey = URLEncoder.encode(categoryKey, StandardCharsets.UTF_8.toString())
                                     val encodedTitle = URLEncoder.encode(categoryTitle, StandardCharsets.UTF_8.toString())
                                     navController.navigate("category/$encodedKey/$encodedTitle")
                                 },
                                 onSearchClick = {
-                                    currentTab = CineNavTab.SEARCH
+                                    navController.navigate("search")
                                 },
                                 onProfileClick = {
                                     currentTab = CineNavTab.PROFILE
@@ -169,22 +237,25 @@ fun CineApp(
                             )
                         }
 
-                        CineNavTab.SEARCH -> {
-                            SearchScreen(
-                                query = searchQuery,
-                                onQueryChange = { viewModel.updateSearchQuery(it) },
-                                selectedGenre = selectedGenreFilter,
-                                onSelectGenre = { viewModel.selectGenreFilter(it) },
-                                searchResults = searchResults,
-                                recentSearches = recentSearches,
-                                onSelectRecentSearch = { term -> viewModel.addRecentSearch(term) },
-                                onRemoveRecentSearch = { term -> viewModel.removeRecentSearch(term) },
-                                onClearRecentSearches = { viewModel.clearRecentSearches() },
-                                onMovieClick = { movie ->
-                                    navController.navigate("details/${movie.id}")
+                        CineNavTab.DOWNLOADS -> {
+                            DownloadsScreen(
+                                downloadedMovies = downloadedMovies,
+                                downloadProgressMap = downloadProgressMap,
+                                onWatchMovie = { movie ->
+                                    navController.navigate("player/${movie.id}/false")
                                 },
-                                isSearchingTmdb = isSearchingTmdb,
-                                isTmdbLive = viewModel.isTmdbLiveConfigured
+                                onDeleteDownload = { movieId ->
+                                    viewModel.deleteDownloadedMovie(movieId, context)
+                                },
+                                onCancelDownload = { movieId ->
+                                    viewModel.cancelMovieDownload(movieId, context)
+                                },
+                                onExploreMoviesClick = {
+                                    currentTab = CineNavTab.HOME
+                                },
+                                onSearchClick = {
+                                    navController.navigate("search")
+                                }
                             )
                         }
 
@@ -196,7 +267,9 @@ fun CineApp(
                                 },
                                 onDiscoverClick = {
                                     currentTab = CineNavTab.HOME
-                                }
+                                },
+                                isOnline = isOnline,
+                                cachedMoviesCount = cachedMoviesCount
                             )
                         }
 
@@ -218,6 +291,16 @@ fun CineApp(
                                 onUploadMovieClick = {
                                     showAdminUploadDialog = true
                                 },
+                                onOpenAdminReleasePublisher = {
+                                    viewModel.openAdminReleasePublisher()
+                                },
+                                onCheckForUpdates = {
+                                    viewModel.checkForAppUpdates(context, isManualCheck = true) { isNewAvailable, message ->
+                                        android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                currentVersionName = viewModel.currentVersionName,
+                                currentVersionCode = viewModel.currentVersionCode,
                                 isGoogleSignedIn = isGoogleSignedIn,
                                 isFirestoreSynced = isFirestoreSynced,
                                 userDisplayName = userDisplayName,
@@ -255,8 +338,82 @@ fun CineApp(
                             onDismiss = { showAdminUploadDialog = false }
                         )
                     }
+
+                    // Direct OTA App Update Dialog
+                    if (showUpdateDialog && appUpdateInfo != null) {
+                        AppUpdateDialog(
+                            updateInfo = appUpdateInfo!!,
+                            downloadProgress = updateDownloadProgress,
+                            onStartUpdate = {
+                                viewModel.startAppUpdateDownload(context)
+                            },
+                            onDismiss = {
+                                viewModel.dismissUpdateDialog()
+                            }
+                        )
+                    }
+
+                    // Admin Release Publisher Dialog (grapherkidd0@gmail.com)
+                    if (showAdminReleasePublisher && isAdminLoggedIn) {
+                        AdminReleasePublisherDialog(
+                            currentUpdateInfo = appUpdateInfo,
+                            currentVersionCode = viewModel.currentVersionCode,
+                            currentVersionName = viewModel.currentVersionName,
+                            isPublishing = isPublishingRelease,
+                            onPublish = { code, name, apkUrl, notes, size, isForce ->
+                                viewModel.publishNewRelease(
+                                    context = context,
+                                    versionCode = code,
+                                    versionName = name,
+                                    apkUrl = apkUrl,
+                                    notes = notes,
+                                    size = size,
+                                    isForce = isForce
+                                ) { success, msg ->
+                                    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
+                                }
+                            },
+                            onDismiss = {
+                                viewModel.dismissAdminReleasePublisher()
+                            }
+                        )
+                    }
                 }
             }
+        }
+
+        // Search Screen Route (Accessible from header / home search button)
+        composable(
+            route = "search",
+            enterTransition = {
+                slideIntoContainer(
+                    AnimatedContentTransitionScope.SlideDirection.Start,
+                    animationSpec = tween(300)
+                )
+            },
+            exitTransition = {
+                slideOutOfContainer(
+                    AnimatedContentTransitionScope.SlideDirection.End,
+                    animationSpec = tween(300)
+                )
+            }
+        ) {
+            SearchScreen(
+                query = searchQuery,
+                onQueryChange = { viewModel.updateSearchQuery(it) },
+                selectedGenre = selectedGenreFilter,
+                onSelectGenre = { viewModel.selectGenreFilter(it) },
+                searchResults = searchResults,
+                recentSearches = recentSearches,
+                onSelectRecentSearch = { term -> viewModel.addRecentSearch(term) },
+                onRemoveRecentSearch = { term -> viewModel.removeRecentSearch(term) },
+                onClearRecentSearches = { viewModel.clearRecentSearches() },
+                onMovieClick = { movie ->
+                    navController.navigate("details/${movie.id}")
+                },
+                isSearchingTmdb = isSearchingTmdb,
+                isTmdbLive = viewModel.isTmdbLiveConfigured
+            )
         }
 
         // Movie Details Screen
@@ -281,10 +438,25 @@ fun CineApp(
             val movie = dynamicMovies[movieId] ?: viewModel.getMovieById(movieId)
             if (movie != null) {
                 val isInWatchlist = viewModel.isMovieInWatchlist(movie.id)
+                val downloadedEntity = downloadedMovies.firstOrNull { it.movieId == movie.id && it.downloadStatus == "COMPLETED" }
+                val isDownloaded = downloadedEntity != null
+                val isRoomCached = cachedMovies.any { it.id == movie.id } || isInWatchlist
+                val downloadProgress = downloadProgressMap[movie.id]
+
                 MovieDetailsScreen(
                     movie = movie,
                     isInWatchlist = isInWatchlist,
+                    isDownloaded = isDownloaded,
+                    downloadProgress = downloadProgress,
+                    isOnline = isOnline,
+                    isRoomCached = isRoomCached,
                     onToggleWatchlist = { viewModel.toggleWatchlist(movie) },
+                    onDownloadClick = { movieToDownload ->
+                        viewModel.startMovieDownload(movieToDownload, context)
+                    },
+                    onDeleteDownloadClick = { movieIdToDelete ->
+                        viewModel.deleteDownloadedMovie(movieIdToDelete, context)
+                    },
                     onWatchClick = {
                         navController.navigate("player/${movie.id}/false")
                     },
@@ -313,14 +485,23 @@ fun CineApp(
         ) { backStackEntry ->
             val movieId = backStackEntry.arguments?.getString("movieId") ?: ""
             val isTrailer = backStackEntry.arguments?.getBoolean("isTrailer") ?: false
-            val movie = viewModel.getMovieById(movieId)
-            if (movie != null) {
+            val baseMovie = viewModel.getMovieById(movieId)
+            val downloadedEntity = downloadedMovies.firstOrNull { it.movieId == movieId && it.downloadStatus == "COMPLETED" }
+
+            // If movie is downloaded locally and user wants to watch the movie, play the local offline video file!
+            val movieToPlay = if (!isTrailer && downloadedEntity != null) {
+                downloadedEntity.toMovie()
+            } else {
+                baseMovie
+            }
+
+            if (movieToPlay != null) {
                 VideoPlayerScreen(
-                    movie = movie,
+                    movie = movieToPlay,
                     isTrailer = isTrailer,
                     onBackClick = { navController.popBackStack() },
                     onSaveProgress = { position, total ->
-                        viewModel.recordWatchProgress(movie.id, position, total)
+                        viewModel.recordWatchProgress(movieToPlay.id, position, total)
                     }
                 )
             }

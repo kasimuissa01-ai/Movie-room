@@ -1,6 +1,8 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,8 +19,12 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.OfflinePin
 import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -43,6 +49,9 @@ import com.example.ui.components.EmptyWatchlistIllustration
 import com.example.ui.components.MovieGrid
 import com.example.ui.components.PrimaryButton
 import com.example.ui.theme.CineBlack
+import com.example.ui.theme.CineCardBorder
+import com.example.ui.theme.CineGold
+import com.example.ui.theme.CineGreen
 import com.example.ui.theme.CineRedPrimary
 import com.example.ui.theme.CineSurfaceElevated
 import com.example.ui.theme.CineTextMuted
@@ -60,7 +69,9 @@ fun MyListScreen(
     movies: List<Movie>,
     onMovieClick: (Movie) -> Unit,
     onDiscoverClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isOnline: Boolean = true,
+    cachedMoviesCount: Int = 0
 ) {
     var currentSort by remember { mutableStateOf(WatchlistSort.RECENTLY_ADDED) }
     var showSortMenu by remember { mutableStateOf(false) }
@@ -165,12 +176,72 @@ fun MyListScreen(
                 }
             }
 
+            // Room Database Offline Cache Status Banner
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 4.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        if (!isOnline) CineGold.copy(alpha = 0.12f)
+                        else CineSurfaceElevated.copy(alpha = 0.6f)
+                    )
+                    .border(
+                        width = 0.8.dp,
+                        color = if (!isOnline) CineGold.copy(alpha = 0.45f) else CineCardBorder.copy(alpha = 0.4f),
+                        shape = RoundedCornerShape(10.dp)
+                    )
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = if (!isOnline) Icons.Default.CloudOff else Icons.Default.Storage,
+                    contentDescription = null,
+                    tint = if (!isOnline) CineGold else CineGreen,
+                    modifier = Modifier.size(18.dp)
+                )
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (!isOnline) "Offline Mode Active" else "Room Local Cache Protected",
+                        color = if (!isOnline) CineGold else CineTextPrimary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = if (!isOnline)
+                            "Your saved Watchlist movies and basic info are stored locally and accessible without internet."
+                        else
+                            "Watchlist titles and basic movie info are persisted in Room database for offline viewing.",
+                        color = CineTextMuted,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = if (!isOnline) CineGold.copy(alpha = 0.2f) else CineGreen.copy(alpha = 0.15f)
+                ) {
+                    Text(
+                        text = if (!isOnline) "OFFLINE" else "ROOM DB",
+                        color = if (!isOnline) CineGold else CineGreen,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Black,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
             // Body
             if (sortedMovies.isEmpty()) {
                 EmptyState(
                     illustration = { EmptyWatchlistIllustration() },
                     title = "Your watchlist is waiting.",
-                    subtitle = "Save movies here and come back when you're ready to stream.",
+                    subtitle = "Save movies here to cache their details in Room and browse them even while offline.",
                     actionButton = {
                         PrimaryButton(
                             text = "Discover Movies",

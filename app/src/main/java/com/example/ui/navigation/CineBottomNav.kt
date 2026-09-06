@@ -18,13 +18,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
@@ -57,7 +57,7 @@ enum class CineNavTab(
     val route: String
 ) {
     HOME("Home", Icons.Filled.Home, Icons.Outlined.Home, "home"),
-    SEARCH("Search", Icons.Filled.Search, Icons.Outlined.Search, "search"),
+    DOWNLOADS("Downloads", Icons.Filled.Download, Icons.Outlined.Download, "downloads"),
     MY_LIST("My List", Icons.Filled.Bookmark, Icons.Outlined.BookmarkBorder, "my_list"),
     PROFILE("Profile", Icons.Filled.Person, Icons.Outlined.Person, "profile")
 }
@@ -67,7 +67,8 @@ fun CineBottomBar(
     currentTab: CineNavTab,
     onTabSelected: (CineNavTab) -> Unit,
     modifier: Modifier = Modifier,
-    watchListCount: Int = 0
+    watchListCount: Int = 0,
+    downloadCount: Int = 0
 ) {
     Surface(
         modifier = modifier
@@ -117,6 +118,13 @@ fun CineBottomBar(
                                     contentColor = Color.White
                                 ) {
                                     Text(text = "$watchListCount", fontSize = 10.sp)
+                                }
+                            } else if (tab == CineNavTab.DOWNLOADS && downloadCount > 0) {
+                                Badge(
+                                    containerColor = CineRedPrimary,
+                                    contentColor = Color.White
+                                ) {
+                                    Text(text = "$downloadCount", fontSize = 10.sp)
                                 }
                             }
                         }

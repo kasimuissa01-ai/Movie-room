@@ -62,7 +62,7 @@ fun CineHeader(
         ) {
             Image(
                 painter = painterResource(id = R.drawable.ic_app_logo),
-                contentDescription = "CineStream Logo",
+                contentDescription = "Movie Room Logo",
                 modifier = Modifier
                     .size(34.dp)
                     .clip(CircleShape)
@@ -71,14 +71,15 @@ fun CineHeader(
             Spacer(modifier = Modifier.width(10.dp))
 
             Text(
-                text = "CINE",
+                text = "MOVIE",
                 color = CineRedPrimary,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Black,
                 letterSpacing = 1.sp
             )
+            Spacer(modifier = Modifier.width(4.dp))
             Text(
-                text = "STREAM",
+                text = "ROOM",
                 color = CineTextPrimary,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Black,

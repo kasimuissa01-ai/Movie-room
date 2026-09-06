@@ -6,18 +6,18 @@ import com.example.model.CastMember
 import com.example.model.Movie
 
 /**
- * Room Database entity representing an item saved in the user's Watchlist.
- * Caches all fundamental movie details locally so the user can browse their
- * entire Watchlist and view basic movie info completely offline.
+ * Room Database entity that caches complete basic movie metadata locally
+ * so users can view movie info, descriptions, genres, ratings, and details
+ * even without an active internet connection.
  */
-@Entity(tableName = "watchlist_items")
-data class WatchlistItemEntity(
+@Entity(tableName = "cached_movies")
+data class CachedMovieEntity(
     @PrimaryKey
-    val movieId: String,
-    val title: String = "",
-    val description: String = "",
-    val posterUrl: String = "",
-    val backdropUrl: String = "",
+    val id: String,
+    val title: String,
+    val description: String,
+    val posterUrl: String,
+    val backdropUrl: String,
     val trailerUrl: String = "",
     val videoUrl: String = "",
     val year: Int = 2026,
@@ -26,11 +26,11 @@ data class WatchlistItemEntity(
     val genresCsv: String = "",
     val director: String = "",
     val studio: String = "Movie Room Studios",
-    val category: String = "Watchlist",
+    val category: String = "Cinema",
     val quality: String = "4K Ultra HD",
     val contentRating: String = "PG-13",
     val castString: String = "",
-    val addedAt: Long = System.currentTimeMillis()
+    val cachedAt: Long = System.currentTimeMillis()
 ) {
     fun toMovie(): Movie {
         val parsedGenres = genresCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }
@@ -48,9 +48,9 @@ data class WatchlistItemEntity(
         } else emptyList()
 
         return Movie(
-            id = movieId,
-            title = title.ifBlank { "Saved Movie" },
-            description = description.ifBlank { "Saved to your offline watchlist." },
+            id = id,
+            title = title,
+            description = description,
             posterUrl = posterUrl,
             backdropUrl = backdropUrl.ifBlank { posterUrl },
             trailerUrl = trailerUrl,
@@ -58,11 +58,11 @@ data class WatchlistItemEntity(
             year = year,
             durationMinutes = durationMinutes,
             rating = rating,
-            genres = if (parsedGenres.isNotEmpty()) parsedGenres else listOf("Watchlist"),
+            genres = if (parsedGenres.isNotEmpty()) parsedGenres else listOf("Cinema"),
             cast = parsedCast,
             director = director.ifBlank { "Movie Room" },
             studio = studio,
-            category = category.ifBlank { "Watchlist" },
+            category = category.ifBlank { "Cinema" },
             featured = false,
             trending = false,
             releaseDate = year.toString(),
@@ -72,10 +72,10 @@ data class WatchlistItemEntity(
     }
 
     companion object {
-        fun fromMovie(movie: Movie): WatchlistItemEntity {
+        fun fromMovie(movie: Movie): CachedMovieEntity {
             val castEncoded = movie.cast.joinToString(";;") { "${it.name}||${it.character}||${it.avatarUrl}" }
-            return WatchlistItemEntity(
-                movieId = movie.id,
+            return CachedMovieEntity(
+                id = movie.id,
                 title = movie.title,
                 description = movie.description,
                 posterUrl = movie.posterUrl,
@@ -92,7 +92,7 @@ data class WatchlistItemEntity(
                 quality = movie.quality,
                 contentRating = movie.contentRating,
                 castString = castEncoded,
-                addedAt = System.currentTimeMillis()
+                cachedAt = System.currentTimeMillis()
             )
         }
     }

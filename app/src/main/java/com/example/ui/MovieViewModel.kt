@@ -17,7 +17,11 @@ import com.example.data.firebase.GoogleAuthResult
 import com.example.data.r2.R2Config
 import com.example.data.r2.R2Uploader
 import com.example.data.tmdb.TmdbClient
+import com.example.data.updater.AppUpdateInfo
+import com.example.data.updater.AppUpdateManager
+import com.example.data.updater.UpdateDownloadProgress
 import com.example.model.Movie
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,20 +37,24 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         private const val TAG = "MovieViewModel"
+        const val ADMIN_EMAIL = "grapherkidd0@gmail.com"
     }
 
     private val prefs = application.getSharedPreferences("cinestream_prefs", Context.MODE_PRIVATE)
     private val database = MovieDatabase.getDatabase(application)
     private val repository = MovieRepository(database.movieDao())
+    private val networkMonitor = com.example.util.NetworkMonitor(application)
+
+    val isOnline: StateFlow<Boolean> = networkMonitor.isOnline
 
     val isTmdbLiveConfigured: Boolean = TmdbClient.isApiKeyConfigured
     val isR2Configured: Boolean get() = R2Config.isR2Configured
     val r2BucketName: String get() = R2Config.bucketName
     val r2PublicUrlBase: String get() = R2Config.publicUrlBase
 
-    // Admin Session State
+    // Admin Session State - strictly authorized for grapherkidd0@gmail.com
     private val _isAdminLoggedIn = MutableStateFlow(
-        prefs.getBoolean("admin_logged_in", false)
+        (prefs.getString("google_user_email", "") ?: "").trim().equals(ADMIN_EMAIL, ignoreCase = true)
     )
     val isAdminLoggedIn: StateFlow<Boolean> = _isAdminLoggedIn.asStateFlow()
 
@@ -112,12 +120,19 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     )
     val onboardingCompleted: StateFlow<Boolean> = _onboardingCompleted.asStateFlow()
 
-    // Watchlist from Room (resolving static, uploaded R2, and TMDB dynamic movies)
+    // Watchlist from Room (all metadata preserved in local SQLite storage for offline access)
     val watchlistMovies: StateFlow<List<Movie>> = repository.getWatchlistMovies { id ->
         uploadedMovies.value.firstOrNull { it.id == id }
             ?: _dynamicMovies.value[id]
             ?: SampleMovies.getMovieById(id)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // All cached movies in Room database (available offline)
+    val cachedMovies: StateFlow<List<Movie>> = repository.getAllCachedMovies()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val cachedMoviesCount: StateFlow<Int> = repository.getCachedMoviesCountFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     // Watch History from Room
     val watchHistory: StateFlow<List<WatchHistoryEntity>> = repository.getWatchHistory()
@@ -141,17 +156,57 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
     private var tmdbSearchJob: Job? = null
 
-    init {
-        // Load registered Firestore users in background
-        loadFirestoreUsers(application)
+    // App OTA Auto-Updater Live State
+    private val _appUpdateInfo = MutableStateFlow<AppUpdateInfo?>(null)
+    val appUpdateInfo: StateFlow<AppUpdateInfo?> = _appUpdateInfo.asStateFlow()
 
-        // If TMDB API key is configured, preload movie 27205 ("Inception") from TMDB
-        if (isTmdbLiveConfigured) {
-            fetchTmdbMovieById("27205")
+    private val _updateDownloadProgress = MutableStateFlow<UpdateDownloadProgress>(UpdateDownloadProgress.Idle)
+    val updateDownloadProgress: StateFlow<UpdateDownloadProgress> = _updateDownloadProgress.asStateFlow()
+
+    private val _showUpdateDialog = MutableStateFlow(false)
+    val showUpdateDialog: StateFlow<Boolean> = _showUpdateDialog.asStateFlow()
+
+    private val _showAdminReleasePublisher = MutableStateFlow(false)
+    val showAdminReleasePublisher: StateFlow<Boolean> = _showAdminReleasePublisher.asStateFlow()
+
+    private val _isPublishingRelease = MutableStateFlow(false)
+    val isPublishingRelease: StateFlow<Boolean> = _isPublishingRelease.asStateFlow()
+
+    val currentVersionCode: Long get() = AppUpdateManager.getCurrentVersionCode(getApplication())
+    val currentVersionName: String get() = AppUpdateManager.getCurrentVersionName(getApplication())
+
+    // Offline Downloads State
+    val downloadedMovies: StateFlow<List<com.example.data.entity.DownloadedMovieEntity>> =
+        repository.getDownloadedMovies()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val downloadProgressMap: StateFlow<Map<String, Int>> =
+        com.example.data.MovieDownloadManager.downloadProgressMap
+
+    init {
+        // Run background warmups entirely on IO dispatcher so UI launches instantly with zero delay
+        viewModelScope.launch(Dispatchers.IO) {
+            // Load registered Firestore users in background
+            loadFirestoreUsers(application)
+
+            // Check for app OTA updates automatically on launch
+            checkForAppUpdates(application)
+
+            // Seed SampleMovies into Room persistent cache for complete offline access
+            try {
+                repository.cacheMovies(SampleMovies.allMovies)
+            } catch (e: Exception) {
+                Log.w(TAG, "Sample movies room cache init: ${e.message}")
+            }
+
+            // If TMDB API key is configured, preload movie 27205 ("Inception") from TMDB
+            if (isTmdbLiveConfigured) {
+                fetchTmdbMovieById("27205")
+            }
         }
     }
 
-    // Filtered search results combining local database, uploaded R2 movies, and TMDB live results
+    // Filtered search results combining local database, uploaded R2 movies, Room cache, and TMDB live results
     val searchResults: StateFlow<List<Movie>> = combine(
         _searchQuery,
         _selectedGenreFilter,
@@ -159,7 +214,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         _dynamicMovies,
         uploadedMovies
     ) { query, genreFilter, tmdbResults, dynamicMap, uploadedList ->
-        val localList = uploadedList + allMovies + dynamicMap.values
+        val localList = (uploadedList + cachedMovies.value + allMovies + dynamicMap.values).distinctBy { it.id }
 
         val filteredLocal = localList.filter { movie ->
             val matchesGenre = genreFilter == null ||
@@ -217,11 +272,12 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     val results = TmdbClient.searchMovies(cleanQuery)
                     _tmdbSearchResults.value = results
 
-                    // Also cache any fetched movies into _dynamicMovies
+                    // Also cache any fetched movies into _dynamicMovies and persistent Room database
                     if (results.isNotEmpty()) {
                         val currentMap = _dynamicMovies.value.toMutableMap()
                         results.forEach { currentMap[it.id] = it }
                         _dynamicMovies.value = currentMap
+                        repository.cacheMovies(results)
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error querying TMDB for $query: ${e.message}")
@@ -241,6 +297,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     val currentMap = _dynamicMovies.value.toMutableMap()
                     currentMap[movie.id] = movie
                     _dynamicMovies.value = currentMap
+                    repository.cacheMovie(movie)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error fetching TMDB movie $movieId: ${e.message}")
@@ -251,6 +308,9 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     fun getMovieById(id: String): Movie? {
         return uploadedMovies.value.firstOrNull { it.id == id }
             ?: _dynamicMovies.value[id]
+            ?: watchlistMovies.value.firstOrNull { it.id == id }
+            ?: cachedMovies.value.firstOrNull { it.id == id }
+            ?: downloadedMovies.value.firstOrNull { it.movieId == id }?.toMovie()
             ?: SampleMovies.getMovieById(id)
     }
 
@@ -268,6 +328,46 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     fun logoutAdmin() {
         prefs.edit().putBoolean("admin_logged_in", false).apply()
         _isAdminLoggedIn.value = false
+    }
+
+    // Supabase Authentication (Email/Password & Account Sync)
+    fun signInWithSupabase(
+        email: String,
+        password: String,
+        onComplete: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            when (val result = com.example.data.supabase.SupabaseClient.signInWithEmail(email, password)) {
+                is com.example.data.supabase.SupabaseAuthResult.Success -> {
+                    applyAuthenticatedUser(getApplication(), result.user) { success, _ ->
+                        onComplete(success, result.message)
+                    }
+                }
+                is com.example.data.supabase.SupabaseAuthResult.Error -> {
+                    onComplete(false, result.message)
+                }
+            }
+        }
+    }
+
+    fun signUpWithSupabase(
+        email: String,
+        password: String,
+        displayName: String,
+        onComplete: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            when (val result = com.example.data.supabase.SupabaseClient.signUpWithEmail(email, password, displayName)) {
+                is com.example.data.supabase.SupabaseAuthResult.Success -> {
+                    applyAuthenticatedUser(getApplication(), result.user) { success, _ ->
+                        onComplete(success, result.message)
+                    }
+                }
+                is com.example.data.supabase.SupabaseAuthResult.Error -> {
+                    onComplete(false, result.message)
+                }
+            }
+        }
     }
 
     // Direct Seamless Google OAuth with Firebase Firestore Sync
@@ -295,6 +395,37 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Google auth error: ${e.message}", e)
+                onComplete(false, e.message ?: "Authentication failed")
+            }
+        }
+    }
+
+    fun handleGoogleSignInIntentResult(
+        context: Context,
+        data: android.content.Intent?,
+        serverClientId: String? = null,
+        onComplete: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
+        viewModelScope.launch {
+            try {
+                val result = FirebaseAuthManager.handleGoogleSignInIntent(
+                    context = context,
+                    data = data,
+                    serverClientId = serverClientId
+                )
+                when (result) {
+                    is GoogleAuthResult.Success -> {
+                        applyAuthenticatedUser(context, result.user, onComplete)
+                    }
+                    is GoogleAuthResult.Error -> {
+                        onComplete(false, result.message)
+                    }
+                    is GoogleAuthResult.Cancelled -> {
+                        onComplete(false, "Cancelled")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Google auth intent result error: ${e.message}", e)
                 onComplete(false, e.message ?: "Authentication failed")
             }
         }
@@ -338,12 +469,15 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         user: com.example.data.firebase.AuthUser,
         onComplete: (Boolean, String) -> Unit
     ) {
+        val isAdmin = user.email.trim().equals(ADMIN_EMAIL, ignoreCase = true)
+
         prefs.edit()
             .putBoolean("google_signed_in", true)
             .putString("google_user_name", user.displayName)
             .putString("google_user_email", user.email)
             .putString("google_user_photo", user.photoUrl)
             .putBoolean("google_firestore_synced", user.firestoreSynced)
+            .putBoolean("admin_logged_in", isAdmin)
             .apply()
 
         _isGoogleSignedIn.value = true
@@ -351,10 +485,13 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         _userEmail.value = user.email
         _userPhotoUrl.value = user.photoUrl
         _isFirestoreSynced.value = user.firestoreSynced
+        _isAdminLoggedIn.value = isAdmin
 
         loadFirestoreUsers(context)
 
-        val msg = if (user.firestoreSynced) {
+        val msg = if (isAdmin) {
+            "Admin Authenticated: ${user.email} (Upload Access Granted)"
+        } else if (user.firestoreSynced) {
             "Authenticated as ${user.email} (synced to Firestore)"
         } else {
             "Signed in as ${user.email}"
@@ -386,12 +523,14 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
             .putString("google_user_email", "")
             .putString("google_user_photo", "")
             .putBoolean("google_firestore_synced", false)
+            .putBoolean("admin_logged_in", false)
             .apply()
         _isGoogleSignedIn.value = false
         _userDisplayName.value = ""
         _userEmail.value = ""
         _userPhotoUrl.value = ""
         _isFirestoreSynced.value = false
+        _isAdminLoggedIn.value = false
     }
 
     // Admin Movie Upload to Cloudflare R2
@@ -406,8 +545,10 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         rating: Float,
         videoUri: Uri?,
         posterUri: Uri?,
+        trailerUri: Uri? = null,
         directVideoUrl: String,
         directPosterUrl: String,
+        directTrailerUrl: String = "",
         onFinished: (Boolean, String) -> Unit
     ) {
         if (!_isAdminLoggedIn.value) {
@@ -427,12 +568,13 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
                 var finalVideoUrl = directVideoUrl.trim()
                 var finalPosterUrl = directPosterUrl.trim()
+                var finalTrailerUrl = directTrailerUrl.trim()
                 var r2Key = ""
 
                 // 1. Upload Video if Uri provided
                 if (videoUri != null) {
                     if (isR2Configured) {
-                        _uploadStatusText.value = "Uploading video to Cloudflare R2..."
+                        _uploadStatusText.value = "Uploading feature film to Cloudflare R2..."
                         val videoKey = "movies/${timestamp}_$cleanTitle.mp4"
                         val result = R2Uploader.uploadFromUri(
                             context = context,
@@ -440,10 +582,10 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                             objectKey = videoKey,
                             contentType = "video/mp4"
                         ) { uploaded, total, percent ->
-                            _uploadProgress.value = 0.1f + (percent / 100f) * 0.7f
+                            _uploadProgress.value = 0.05f + (percent / 100f) * 0.55f
                             val mbUploaded = uploaded / (1024 * 1024)
                             val mbTotal = total / (1024 * 1024)
-                            _uploadStatusText.value = "Uploading to Cloudflare R2: $mbUploaded MB / $mbTotal MB ($percent%)"
+                            _uploadStatusText.value = "Uploading feature film: $mbUploaded MB / $mbTotal MB ($percent%)"
                         }
 
                         when (result) {
@@ -453,14 +595,12 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                             }
                             is R2Uploader.UploadResult.Failure -> {
                                 Log.w(TAG, "Video upload to R2 encountered: ${result.errorMessage}")
-                                // If upload failed but user gave direct video url or fallback, continue with warning
                                 if (finalVideoUrl.isBlank()) {
                                     finalVideoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
                                 }
                             }
                         }
                     } else {
-                        // R2 not configured in secrets yet, fallback to direct url or demo video
                         if (finalVideoUrl.isBlank()) {
                             finalVideoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
                         }
@@ -469,11 +609,35 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     finalVideoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
                 }
 
-                // 2. Upload Poster if Uri provided
+                // 2. Upload Trailer if Uri provided
+                if (trailerUri != null) {
+                    if (isR2Configured) {
+                        _uploadStatusText.value = "Uploading short trailer clip to Cloudflare R2..."
+                        val trailerKey = "trailers/${timestamp}_${cleanTitle}_trailer.mp4"
+                        val trailerResult = R2Uploader.uploadFromUri(
+                            context = context,
+                            uri = trailerUri,
+                            objectKey = trailerKey,
+                            contentType = "video/mp4"
+                        ) { _, _, percent ->
+                            _uploadProgress.value = 0.65f + (percent / 100f) * 0.2f
+                            _uploadStatusText.value = "Uploading trailer video: ($percent%)"
+                        }
+                        if (trailerResult is R2Uploader.UploadResult.Success) {
+                            finalTrailerUrl = trailerResult.publicUrl
+                        }
+                    }
+                }
+
+                if (finalTrailerUrl.isBlank()) {
+                    finalTrailerUrl = finalVideoUrl
+                }
+
+                // 3. Upload Poster if Uri provided
                 if (posterUri != null) {
                     if (isR2Configured) {
-                        _uploadStatusText.value = "Uploading poster to Cloudflare R2..."
-                        _uploadProgress.value = 0.85f
+                        _uploadStatusText.value = "Uploading poster artwork to Cloudflare R2..."
+                        _uploadProgress.value = 0.88f
                         val posterKey = "posters/${timestamp}_$cleanTitle.jpg"
                         val posterResult = R2Uploader.uploadFromUri(
                             context = context,
@@ -491,9 +655,9 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     finalPosterUrl = "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=800&q=80"
                 }
 
-                // 3. Save to Room database
-                _uploadStatusText.value = "Registering movie in CineStream catalog..."
-                _uploadProgress.value = 0.95f
+                // 4. Save to Room database
+                _uploadStatusText.value = "Registering movie in Movie Room catalog..."
+                _uploadProgress.value = 0.96f
 
                 val entity = UploadedMovieEntity(
                     id = movieId,
@@ -502,7 +666,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     posterUrl = finalPosterUrl,
                     backdropUrl = finalPosterUrl,
                     videoUrl = finalVideoUrl,
-                    trailerUrl = finalVideoUrl,
+                    trailerUrl = finalTrailerUrl,
                     year = year,
                     durationMinutes = durationMinutes,
                     rating = rating,
@@ -516,8 +680,15 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
                 repository.saveUploadedMovie(entity)
 
+                // Dispatch New Release Notification to users
+                try {
+                    com.example.notification.MovieNotificationHelper.showNewMovieNotification(context, entity.toMovie())
+                } catch (e: Exception) {
+                    Log.w(TAG, "Notification dispatch notice: ${e.message}")
+                }
+
                 _uploadProgress.value = 1f
-                _uploadStatusText.value = "Movie successfully published to CineStream!"
+                _uploadStatusText.value = "Movie successfully published to Movie Room!"
                 delay(300)
                 onFinished(true, "Successfully uploaded and published '$title'!")
             } catch (e: Exception) {
@@ -564,7 +735,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleWatchlist(movie: Movie) {
         viewModelScope.launch {
             val isInList = isMovieInWatchlist(movie.id)
-            repository.toggleWatchlist(movie.id, isInList)
+            repository.toggleWatchlist(movie, isInList)
         }
     }
 
@@ -575,6 +746,122 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     fun recordWatchProgress(movieId: String, positionSeconds: Int, totalDurationSeconds: Int) {
         viewModelScope.launch {
             repository.recordWatchProgress(movieId, positionSeconds, totalDurationSeconds)
+        }
+    }
+
+    // App OTA Auto-Updater Methods
+    fun checkForAppUpdates(
+        context: Context,
+        isManualCheck: Boolean = false,
+        onResult: ((Boolean, String) -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            try {
+                val info = AppUpdateManager.checkForUpdates(context)
+                _appUpdateInfo.value = info
+                if (info.isUpdateAvailable) {
+                    _showUpdateDialog.value = true
+                    onResult?.invoke(true, "New version v${info.latestVersionName} available!")
+                } else {
+                    if (isManualCheck) {
+                        onResult?.invoke(false, "Movie Room is up to date (v${info.latestVersionName})")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed update check: ${e.message}")
+                if (isManualCheck) {
+                    onResult?.invoke(false, "Could not reach update server: ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun startAppUpdateDownload(context: Context) {
+        val info = _appUpdateInfo.value ?: return
+        viewModelScope.launch {
+            AppUpdateManager.downloadAndInstallApk(context, info) { progress ->
+                _updateDownloadProgress.value = progress
+            }
+        }
+    }
+
+    fun dismissUpdateDialog() {
+        _showUpdateDialog.value = false
+        _updateDownloadProgress.value = UpdateDownloadProgress.Idle
+    }
+
+    fun openAdminReleasePublisher() {
+        _showAdminReleasePublisher.value = true
+    }
+
+    fun dismissAdminReleasePublisher() {
+        _showAdminReleasePublisher.value = false
+    }
+
+    fun publishNewRelease(
+        context: Context,
+        versionCode: Long,
+        versionName: String,
+        apkUrl: String,
+        notes: String,
+        size: String,
+        isForce: Boolean,
+        onComplete: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isPublishingRelease.value = true
+            try {
+                val success = AppUpdateManager.publishNewRelease(
+                    context = context,
+                    versionCode = versionCode,
+                    versionName = versionName,
+                    apkDownloadUrl = apkUrl,
+                    releaseNotes = notes,
+                    fileSizeFormatted = size,
+                    isForceUpdate = isForce
+                )
+                if (success) {
+                    _showAdminReleasePublisher.value = false
+                    // Refresh update info locally
+                    checkForAppUpdates(context)
+                    onComplete(true, "Release v$versionName ($versionCode) successfully published to Firestore!")
+                } else {
+                    onComplete(false, "Failed to publish release metadata. Ensure admin permissions.")
+                }
+            } catch (e: Exception) {
+                onComplete(false, "Error: ${e.message}")
+            } finally {
+                _isPublishingRelease.value = false
+            }
+        }
+    }
+
+    // Offline Downloads Actions
+    fun startMovieDownload(movie: Movie, context: Context) {
+        com.example.data.MovieDownloadManager.startDownload(
+            context = context,
+            movie = movie,
+            coroutineScope = viewModelScope
+        )
+    }
+
+    fun cancelMovieDownload(movieId: String, context: Context) {
+        com.example.data.MovieDownloadManager.cancelDownload(
+            context = context,
+            movieId = movieId,
+            coroutineScope = viewModelScope
+        )
+    }
+
+    fun deleteDownloadedMovie(movieId: String, context: Context) {
+        viewModelScope.launch {
+            com.example.data.MovieDownloadManager.deleteDownload(context, movieId)
+        }
+    }
+
+    fun clearAllDownloadedMovies(context: Context) {
+        viewModelScope.launch {
+            com.example.data.MovieDownloadManager.clearAllDownloads(context)
         }
     }
 }

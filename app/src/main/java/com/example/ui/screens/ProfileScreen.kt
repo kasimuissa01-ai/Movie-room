@@ -78,9 +78,22 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import com.example.data.firebase.FirestoreUserRecord
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Publish
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.CircularProgressIndicator
 import com.example.ui.theme.CineGreen
+import android.os.Build
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.Alarm
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.runtime.rememberCoroutineScope
+import com.example.data.SampleMovies
+import com.example.notification.MovieNotificationHelper
+import kotlinx.coroutines.launch
 
 @Composable
 fun ProfileScreen(
@@ -91,6 +104,10 @@ fun ProfileScreen(
     onAdminLoginClick: () -> Unit = {},
     onAdminLogoutClick: () -> Unit = {},
     onUploadMovieClick: () -> Unit = {},
+    onOpenAdminReleasePublisher: () -> Unit = {},
+    onCheckForUpdates: () -> Unit = {},
+    currentVersionName: String = "1.0.0",
+    currentVersionCode: Long = 1L,
     uploadedMoviesCount: Int = 0,
     isGoogleSignedIn: Boolean = false,
     isFirestoreSynced: Boolean = false,
@@ -103,9 +120,33 @@ fun ProfileScreen(
     onGoogleAuthClick: () -> Unit = {},
     onSignOutGoogleClick: () -> Unit = {}
 ) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var streamingQuality by remember { mutableStateOf("4K Ultra HD") }
     var downloadWifiOnly by remember { mutableStateOf(true) }
-    var notificationsEnabled by remember { mutableStateOf(true) }
+
+    var notificationsEnabled by remember {
+        mutableStateOf(MovieNotificationHelper.isNotificationsEnabled(context))
+    }
+    var reminderHour by remember {
+        mutableStateOf(MovieNotificationHelper.getDailyReminderHour(context))
+    }
+    var hasPostNotificationPermission by remember {
+        mutableStateOf(MovieNotificationHelper.hasNotificationPermission(context))
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasPostNotificationPermission = isGranted
+        if (isGranted) {
+            notificationsEnabled = true
+            MovieNotificationHelper.setNotificationsEnabled(context, true)
+            Toast.makeText(context, "Daily movie alerts enabled!", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "Notification permission is required to receive movie alerts", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     Box(
         modifier = modifier
@@ -190,7 +231,7 @@ fun ProfileScreen(
                                 )
                                 Spacer(modifier = Modifier.height(3.dp))
                                 Text(
-                                    text = if (isGoogleSignedIn) "Google Connected • $userEmail" else "CineStream Ultra VIP • 4K HDR",
+                                    text = if (isGoogleSignedIn) "Google Connected • $userEmail" else "Movie Room Ultra VIP • 4K HDR",
                                     color = if (isGoogleSignedIn) Color(0xFF4285F4) else CineGold,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.SemiBold
@@ -328,15 +369,82 @@ fun ProfileScreen(
                 )
             }
 
-            // Push notifications
+            // Daily Movie Push Notifications
             item(key = "setting_notifications") {
                 SettingToggleItem(
-                    icon = Icons.Default.Notifications,
-                    title = "Release Notifications",
-                    subtitle = "Alerts for new movies and recommendations",
+                    icon = if (notificationsEnabled) Icons.Default.NotificationsActive else Icons.Default.Notifications,
+                    title = "Daily Movie Recommendations",
+                    subtitle = if (!hasPostNotificationPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        "Permission required • Tap to grant notification access"
+                    } else {
+                        "Daily watch reminders, watchlist picks & new movie alerts"
+                    },
                     checked = notificationsEnabled,
-                    onCheckedChange = { notificationsEnabled = it }
+                    onCheckedChange = { isChecked ->
+                        if (isChecked) {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPostNotificationPermission) {
+                                permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                            } else {
+                                notificationsEnabled = true
+                                MovieNotificationHelper.setNotificationsEnabled(context, true)
+                                Toast.makeText(context, "Daily movie alerts enabled!", Toast.LENGTH_SHORT).show()
+                            }
+                        } else {
+                            notificationsEnabled = false
+                            MovieNotificationHelper.setNotificationsEnabled(context, false)
+                            Toast.makeText(context, "Daily movie alerts disabled", Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 )
+            }
+
+            // Daily Reminder Schedule Time
+            if (notificationsEnabled) {
+                item(key = "setting_reminder_time") {
+                    val timeLabel = when (reminderHour) {
+                        13 -> "1:00 PM (Matinee)"
+                        18 -> "6:00 PM (Evening)"
+                        20 -> "8:00 PM (Prime Time)"
+                        21 -> "9:00 PM (Late Night)"
+                        else -> "$reminderHour:00"
+                    }
+                    SettingItem(
+                        icon = Icons.Default.Alarm,
+                        title = "Daily Alert Schedule",
+                        value = timeLabel,
+                        onClick = {
+                            val nextHour = when (reminderHour) {
+                                20 -> 21
+                                21 -> 13
+                                13 -> 18
+                                else -> 20
+                            }
+                            reminderHour = nextHour
+                            MovieNotificationHelper.setDailyReminderTime(context, nextHour, 0)
+                            Toast.makeText(context, "Daily alert set to $timeLabel", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                }
+
+                // Instant Test Notification Trigger
+                item(key = "setting_test_notification") {
+                    SettingItem(
+                        icon = Icons.Default.Send,
+                        title = "Send Test Notification Now",
+                        value = "Preview Alert",
+                        onClick = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPostNotificationPermission) {
+                                permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                            } else {
+                                coroutineScope.launch {
+                                    val movie = SampleMovies.allMovies.firstOrNull() ?: return@launch
+                                    MovieNotificationHelper.showTestNotification(context, movie)
+                                    Toast.makeText(context, "Test notification dispatched! Check your status bar.", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    )
+                }
             }
 
             item(key = "section_account") {
@@ -365,253 +473,34 @@ fun ProfileScreen(
                 SettingItem(
                     icon = Icons.Default.Security,
                     title = "Account Security & Devices",
-                    value = "3 Active",
+                    value = "Active",
                     onClick = {}
                 )
             }
 
-            // TMDB Cloud Integration
-            item(key = "setting_tmdb") {
+            // Check for In-App Updates
+            item(key = "setting_check_updates") {
                 SettingItem(
-                    icon = Icons.Default.Movie,
-                    title = "TMDB Cloud API",
-                    value = if (isTmdbLive) "Connected" else "Secrets Active",
-                    onClick = {}
+                    icon = Icons.Default.SystemUpdate,
+                    title = "App Version & Updates",
+                    value = "v$currentVersionName",
+                    onClick = onCheckForUpdates
                 )
             }
 
-            // Firestore Database Users Section
-            item(key = "section_firestore_database") {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 24.dp, bottom = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+            // Admin Portal & Firestore Database Management (ONLY visible when admin grapherkidd0@gmail.com is logged in)
+            if (isAdminLoggedIn) {
+                item(key = "section_admin") {
                     Text(
-                        text = "Firestore Cloud Users Database",
-                        color = CineTextMuted,
+                        text = "Administrator Portal (grapherkidd0@gmail.com)",
+                        color = CineGold,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
+                        letterSpacing = 1.sp,
+                        modifier = Modifier.padding(top = 24.dp, bottom = 8.dp)
                     )
-
-                    Surface(
-                        onClick = onRefreshFirestoreUsers,
-                        shape = RoundedCornerShape(8.dp),
-                        color = CineSurfaceElevated,
-                        border = BorderStroke(1.dp, CineCardBorder)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (isLoadingFirestoreUsers) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(12.dp),
-                                    color = CineGold,
-                                    strokeWidth = 1.5.dp
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.Refresh,
-                                    contentDescription = "Refresh",
-                                    tint = CineGold,
-                                    modifier = Modifier.size(12.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "Refresh",
-                                color = CineGold,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
                 }
-            }
 
-            item(key = "firestore_users_card") {
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = CineSurface),
-                    border = BorderStroke(1.dp, if (firestoreUsers.isNotEmpty()) Color(0xFF34A853).copy(alpha = 0.5f) else CineCardBorder),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFF34A853).copy(alpha = 0.15f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.People,
-                                        contentDescription = null,
-                                        tint = Color(0xFF34A853),
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column {
-                                    Text(
-                                        text = "Collection: users",
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp,
-                                        color = CineTextPrimary
-                                    )
-                                    Text(
-                                        text = "movieroom-334fb.firebasestorage.app",
-                                        fontSize = 10.sp,
-                                        color = CineTextMuted
-                                    )
-                                }
-                            }
-
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(Color(0xFF34A853).copy(alpha = 0.2f))
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                Text(
-                                    text = "${firestoreUsers.size} RECORD${if (firestoreUsers.size != 1) "S" else ""}",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF34A853)
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        if (firestoreUsers.isEmpty()) {
-                            if (isLoadingFirestoreUsers) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 12.dp),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(20.dp),
-                                        color = CineGold,
-                                        strokeWidth = 2.dp
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Text(
-                                        text = "Loading users from Firestore...",
-                                        fontSize = 12.sp,
-                                        color = CineTextMuted
-                                    )
-                                }
-                            } else {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(CineSurfaceElevated, RoundedCornerShape(10.dp))
-                                        .padding(14.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Text(
-                                        text = if (isGoogleSignedIn) "Current user synced as ${userEmail}" else "No users registered yet. Sign in with Google to create your user document!",
-                                        fontSize = 12.sp,
-                                        color = CineTextSecondary,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                    )
-                                }
-                            }
-                        } else {
-                            Column(
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                firestoreUsers.forEach { userDoc ->
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .background(CineSurfaceElevated, RoundedCornerShape(10.dp))
-                                            .padding(10.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.weight(1f)
-                                        ) {
-                                            AsyncImage(
-                                                model = if (userDoc.photoUrl.isNotBlank()) userDoc.photoUrl
-                                                else "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80",
-                                                contentDescription = userDoc.displayName,
-                                                modifier = Modifier
-                                                    .size(36.dp)
-                                                    .clip(CircleShape)
-                                                    .border(1.dp, Color(0xFF4285F4), CircleShape),
-                                                contentScale = ContentScale.Crop
-                                            )
-                                            Spacer(modifier = Modifier.width(10.dp))
-                                            Column {
-                                                Text(
-                                                    text = userDoc.displayName.ifBlank { "Google User" },
-                                                    color = CineTextPrimary,
-                                                    fontSize = 13.sp,
-                                                    fontWeight = FontWeight.SemiBold
-                                                )
-                                                Text(
-                                                    text = userDoc.email.ifBlank { userDoc.uid },
-                                                    color = CineTextMuted,
-                                                    fontSize = 11.sp
-                                                )
-                                            }
-                                        }
-
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(Color(0xFF4285F4).copy(alpha = 0.2f))
-                                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                        ) {
-                                            Text(
-                                                text = userDoc.role.uppercase(),
-                                                color = Color(0xFF4285F4),
-                                                fontSize = 9.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Admin Portal / Cloudflare R2 Section
-            item(key = "section_admin") {
-                Text(
-                    text = "Administrator & Storage",
-                    color = CineTextMuted,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp,
-                    modifier = Modifier.padding(top = 24.dp, bottom = 8.dp)
-                )
-            }
-
-            if (isAdminLoggedIn) {
                 item(key = "admin_dashboard_card") {
                     Card(
                         shape = RoundedCornerShape(16.dp),
@@ -655,7 +544,7 @@ fun ProfileScreen(
                                             color = CineTextPrimary
                                         )
                                         Text(
-                                            text = "Cloudflare R2 Storage Pipeline Active",
+                                            text = "Authorized as $userEmail",
                                             fontSize = 11.sp,
                                             color = CineGreen
                                         )
@@ -702,7 +591,26 @@ fun ProfileScreen(
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Upload Movie to Cloudflare R2", fontWeight = FontWeight.Bold)
+                                Text("Upload Movie (Admin Only)", fontWeight = FontWeight.Bold)
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // Admin Publish OTA App Update Button
+                            Button(
+                                onClick = onOpenAdminReleasePublisher,
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = CineGold)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Publish,
+                                    contentDescription = null,
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Publish OTA App Update to Users", color = Color.Black, fontWeight = FontWeight.Bold)
                             }
 
                             Spacer(modifier = Modifier.height(8.dp))
@@ -724,14 +632,224 @@ fun ProfileScreen(
                         }
                     }
                 }
-            } else {
-                item(key = "setting_admin_login") {
-                    SettingItem(
-                        icon = Icons.Default.AdminPanelSettings,
-                        title = "Admin Portal & Upload",
-                        value = "Sign In",
-                        onClick = onAdminLoginClick
-                    )
+
+                // Firestore Users Management Card (Admin only)
+                item(key = "section_firestore_database") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 20.dp, bottom = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Firestore Users Directory",
+                            color = CineTextMuted,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        )
+
+                        Surface(
+                            onClick = onRefreshFirestoreUsers,
+                            shape = RoundedCornerShape(8.dp),
+                            color = CineSurfaceElevated,
+                            border = BorderStroke(1.dp, CineCardBorder)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (isLoadingFirestoreUsers) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(12.dp),
+                                        color = CineGold,
+                                        strokeWidth = 1.5.dp
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = "Refresh",
+                                        tint = CineGold,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Refresh",
+                                    color = CineGold,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+
+                item(key = "firestore_users_card") {
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = CineSurface),
+                        border = BorderStroke(1.dp, if (firestoreUsers.isNotEmpty()) Color(0xFF34A853).copy(alpha = 0.5f) else CineCardBorder),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFF34A853).copy(alpha = 0.15f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.People,
+                                            contentDescription = null,
+                                            tint = Color(0xFF34A853),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = "Collection: users",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            color = CineTextPrimary
+                                        )
+                                        Text(
+                                            text = "movieroom-334fb Firestore",
+                                            fontSize = 10.sp,
+                                            color = CineTextMuted
+                                        )
+                                    }
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(Color(0xFF34A853).copy(alpha = 0.2f))
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "${firestoreUsers.size} REGISTERED",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF34A853)
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            if (firestoreUsers.isEmpty()) {
+                                if (isLoadingFirestoreUsers) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 12.dp),
+                                        horizontalArrangement = Arrangement.Center,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(20.dp),
+                                            color = CineGold,
+                                            strokeWidth = 2.dp
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Text(
+                                            text = "Loading users from Firestore...",
+                                            fontSize = 12.sp,
+                                            color = CineTextMuted
+                                        )
+                                    }
+                                } else {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(CineSurfaceElevated, RoundedCornerShape(10.dp))
+                                            .padding(14.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            text = "Current user: $userEmail",
+                                            fontSize = 12.sp,
+                                            color = CineTextSecondary,
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                        )
+                                    }
+                                }
+                            } else {
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    firestoreUsers.forEach { userDoc ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .background(CineSurfaceElevated, RoundedCornerShape(10.dp))
+                                                .padding(10.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                AsyncImage(
+                                                    model = if (userDoc.photoUrl.isNotBlank()) userDoc.photoUrl
+                                                    else "https://image.tmdb.org/t/p/w185/wo2hJpn04vbtmh0B9utCFdsQhxM.jpg",
+                                                    contentDescription = userDoc.displayName,
+                                                    modifier = Modifier
+                                                        .size(36.dp)
+                                                        .clip(CircleShape)
+                                                        .border(1.dp, Color(0xFF4285F4), CircleShape),
+                                                    contentScale = ContentScale.Crop
+                                                )
+                                                Spacer(modifier = Modifier.width(10.dp))
+                                                Column {
+                                                    Text(
+                                                        text = userDoc.displayName.ifBlank { "User" },
+                                                        color = CineTextPrimary,
+                                                        fontSize = 13.sp,
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                    Text(
+                                                        text = userDoc.email.ifBlank { userDoc.uid },
+                                                        color = CineTextMuted,
+                                                        fontSize = 11.sp
+                                                    )
+                                                }
+                                            }
+
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(Color(0xFF4285F4).copy(alpha = 0.2f))
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            ) {
+                                                Text(
+                                                    text = userDoc.role.uppercase(),
+                                                    color = Color(0xFF4285F4),
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -754,7 +872,7 @@ fun ProfileScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "CineStream for Android",
+                        text = "Movie Room for Android",
                         color = CineTextMuted,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium
