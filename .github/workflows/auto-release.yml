@@ -1,0 +1,105 @@
+name: Auto Build and Publish Release
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build APK and Publish GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK Licenses & Install Tools
+        run: |
+          yes | sdkmanager --licenses || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools" || true
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Prepare Keystore and Environment
+        run: |
+          # 1. Restore or generate signing keystore
+          if [ -f "debug.keystore.base64" ]; then
+            base64 -d debug.keystore.base64 > debug.keystore 2>/dev/null || base64 --decode debug.keystore.base64 > debug.keystore || true
+          fi
+          if [ ! -f "debug.keystore" ]; then
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+          # 2. Setup .env file
+          if [ -f ".env.example" ]; then
+            cp .env.example .env
+          else
+            touch .env
+          fi
+
+          # 3. Ensure gradlew executable
+          chmod +x gradlew || true
+
+      - name: Build APK with Gradle
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m"
+        run: |
+          gradle :app:assembleDebug --no-daemon --no-configuration-cache --stacktrace
+
+      - name: Prepare APK Asset
+        id: prep
+        run: |
+          mkdir -p release_assets
+          # Find and copy the generated apk
+          APK_FILE=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
+          if [ -n "$APK_FILE" ]; then
+            cp "$APK_FILE" release_assets/MovieRoom-v1.1.0-build${{ github.run_number }}.apk
+            cp "$APK_FILE" release_assets/MovieRoom-latest.apk
+            echo "apk_path=release_assets/MovieRoom-latest.apk" >> $GITHUB_OUTPUT
+            echo "apk_named=release_assets/MovieRoom-v1.1.0-build${{ github.run_number }}.apk" >> $GITHUB_OUTPUT
+          else
+            echo "Error: No APK found!"
+            exit 1
+          fi
+
+          # Generate dynamic version tag
+          TAG_NAME="v1.1.${{ github.run_number }}"
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release and Upload APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.prep.outputs.tag_name }}
+          name: "Movie Room Update ${{ steps.prep.outputs.tag_name }}"
+          body: |
+            ### 🎬 Movie Room Auto-Update
+            • **Build**: `${{ steps.prep.outputs.tag_name }}`
+            • **Commit**: `${{ github.sha }}`
+            • **Summary**: Automated build from latest commit pushed to `${{ github.ref_name }}`.
+
+            *This APK will be automatically detected by all installed devices running Movie Room.*
+          draft: false
+          prerelease: false
+          files: |
+            ${{ steps.prep.outputs.apk_named }}
+            ${{ steps.prep.outputs.apk_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
