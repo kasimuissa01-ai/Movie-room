@@ -14,9 +14,13 @@ import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlin.coroutines.resume
@@ -25,6 +29,15 @@ object AppUpdateManager {
     private const val TAG = "AppUpdateManager"
     private const val CONFIG_COLLECTION = "config"
     private const val VERSION_DOC = "app_version"
+
+    // Default GitHub repository owner & repo for automatic release polling
+    private var githubRepoOwner: String = "grapherkidd"
+    private var githubRepoName: String = "movieroom"
+
+    fun configureGitHubRepo(owner: String, repo: String) {
+        if (owner.isNotBlank()) githubRepoOwner = owner.trim()
+        if (repo.isNotBlank()) githubRepoName = repo.trim()
+    }
 
     /**
      * Retrieves current running application version code
@@ -66,28 +79,42 @@ object AppUpdateManager {
     }
 
     /**
-     * Checks Firestore for remote application version info
+     * Checks for updates by querying Firestore first, and falling back to GitHub Releases API directly.
+     * This means as soon as you push a GitHub Release with an APK, any user opening the app will automatically get the update prompt!
      */
     suspend fun checkForUpdates(context: Context): AppUpdateInfo = withContext(Dispatchers.IO) {
         val currentCode = getCurrentVersionCode(context)
         val currentName = getCurrentVersionName(context)
-        val firestore = FirebaseAuthManager.getFirestore(context)
 
-        if (firestore == null) {
-            return@withContext AppUpdateInfo(
-                latestVersionCode = currentCode,
-                latestVersionName = currentName,
-                isUpdateAvailable = false
-            )
+        // 1. Try Firestore First
+        val firestoreInfo = checkFirestoreUpdate(context, currentCode, currentName)
+        if (firestoreInfo != null && firestoreInfo.isUpdateAvailable) {
+            return@withContext firestoreInfo
         }
 
-        try {
+        // 2. Automatically query GitHub Releases API directly
+        val githubInfo = checkGitHubLatestRelease(context, currentCode, currentName)
+        if (githubInfo != null && githubInfo.isUpdateAvailable) {
+            return@withContext githubInfo
+        }
+
+        // 3. Return latest known info or current status
+        return@withContext firestoreInfo ?: (githubInfo ?: AppUpdateInfo(
+            latestVersionCode = currentCode,
+            latestVersionName = currentName,
+            isUpdateAvailable = false
+        ))
+    }
+
+    private suspend fun checkFirestoreUpdate(context: Context, currentCode: Long, currentName: String): AppUpdateInfo? {
+        val firestore = FirebaseAuthManager.getFirestore(context) ?: return null
+        return try {
             val docSnapshot = suspendCancellableCoroutine<com.google.firebase.firestore.DocumentSnapshot?> { cont ->
                 firestore.collection(CONFIG_COLLECTION).document(VERSION_DOC)
                     .get()
                     .addOnSuccessListener { doc -> cont.resume(doc) }
                     .addOnFailureListener { e ->
-                        Log.w(TAG, "Failed to check update info: ${e.message}")
+                        Log.w(TAG, "Firestore update check: ${e.message}")
                         cont.resume(null)
                     }
             }
@@ -102,9 +129,9 @@ object AppUpdateManager {
                 val size = docSnapshot.getString("fileSizeFormatted") ?: "APK Update"
                 val force = docSnapshot.getBoolean("isForceUpdate") ?: (currentCode < minCode)
 
-                val isAvailable = latestCode > currentCode && apkUrl.isNotBlank()
+                val isAvailable = (latestCode > currentCode || isVersionNameNewer(latestName, currentName)) && apkUrl.isNotBlank()
 
-                return@withContext AppUpdateInfo(
+                AppUpdateInfo(
                     latestVersionCode = latestCode,
                     latestVersionName = latestName,
                     minSupportedVersionCode = minCode,
@@ -115,22 +142,104 @@ object AppUpdateManager {
                     isForceUpdate = force,
                     isUpdateAvailable = isAvailable
                 )
-            } else {
-                // If doc doesn't exist yet, return current status
-                return@withContext AppUpdateInfo(
-                    latestVersionCode = currentCode,
-                    latestVersionName = currentName,
-                    isUpdateAvailable = false
-                )
-            }
+            } else null
         } catch (e: Exception) {
-            Log.e(TAG, "Error checking updates: ${e.message}")
-            return@withContext AppUpdateInfo(
-                latestVersionCode = currentCode,
-                latestVersionName = currentName,
-                isUpdateAvailable = false
-            )
+            Log.w(TAG, "Firestore check failed: ${e.message}")
+            null
         }
+    }
+
+    /**
+     * Checks GitHub API directly for the latest public release in the repo
+     */
+    private fun checkGitHubLatestRelease(context: Context, currentCode: Long, currentName: String): AppUpdateInfo? {
+        return try {
+            val apiUrl = "https://api.github.com/repos/$githubRepoOwner/$githubRepoName/releases/latest"
+            val connection = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 8000
+                readTimeout = 8000
+                requestMethod = "GET"
+                setRequestProperty("Accept", "application/vnd.github.v3+json")
+                setRequestProperty("User-Agent", "MovieRoom-App")
+            }
+
+            if (connection.responseCode == HttpURLConnection.HTTP_OK) {
+                val reader = BufferedReader(InputStreamReader(connection.inputStream))
+                val responseStr = reader.use { it.readText() }
+                connection.disconnect()
+
+                val json = JSONObject(responseStr)
+                val tagName = json.optString("tag_name", "").removePrefix("v")
+                val releaseName = json.optString("name", "v$tagName")
+                val body = json.optString("body", "New update released on GitHub")
+                val publishedAt = json.optString("published_at", "")
+
+                // Find the .apk download asset
+                val assets = json.optJSONArray("assets") ?: JSONArray()
+                var apkUrl = ""
+                var apkSizeFormatted = "APK Update"
+
+                for (i in 0 until assets.length()) {
+                    val asset = assets.getJSONObject(i)
+                    val assetName = asset.optString("name", "")
+                    if (assetName.endsWith(".apk", ignoreCase = true)) {
+                        apkUrl = asset.optString("browser_download_url", "")
+                        val sizeBytes = asset.optLong("size", 0L)
+                        if (sizeBytes > 0) {
+                            apkSizeFormatted = String.format("%.1f MB", sizeBytes / (1024.0 * 1024.0))
+                        }
+                        break
+                    }
+                }
+
+                if (apkUrl.isNotBlank() && isVersionNameNewer(tagName, currentName)) {
+                    val parsedCode = parseVersionNameToCode(tagName)
+                    return AppUpdateInfo(
+                        latestVersionCode = parsedCode.coerceAtLeast(currentCode + 1),
+                        latestVersionName = tagName.ifBlank { "Latest" },
+                        minSupportedVersionCode = 1L,
+                        apkDownloadUrl = apkUrl,
+                        releaseNotes = body.ifBlank { "New features & improvements from GitHub Release $releaseName" },
+                        releaseDate = publishedAt.take(10).ifBlank { "Recent" },
+                        fileSizeFormatted = apkSizeFormatted,
+                        isForceUpdate = false,
+                        isUpdateAvailable = true
+                    )
+                }
+            }
+            null
+        } catch (e: Exception) {
+            Log.w(TAG, "GitHub releases check error: ${e.message}")
+            null
+        }
+    }
+
+    private fun isVersionNameNewer(latest: String, current: String): Boolean {
+        val cleanLatest = latest.trim().removePrefix("v")
+        val cleanCurrent = current.trim().removePrefix("v")
+        if (cleanLatest.isBlank() || cleanCurrent.isBlank()) return false
+        if (cleanLatest == cleanCurrent) return false
+
+        val latestParts = cleanLatest.split(".").mapNotNull { it.toIntOrNull() }
+        val currentParts = cleanCurrent.split(".").mapNotNull { it.toIntOrNull() }
+
+        val maxLen = maxOf(latestParts.size, currentParts.size)
+        for (i in 0 until maxLen) {
+            val l = latestParts.getOrElse(i) { 0 }
+            val c = currentParts.getOrElse(i) { 0 }
+            if (l > c) return true
+            if (l < c) return false
+        }
+        return false
+    }
+
+    private fun parseVersionNameToCode(versionName: String): Long {
+        val parts = versionName.trim().removePrefix("v").split(".").mapNotNull { it.toIntOrNull() }
+        var code = 0L
+        for (part in parts) {
+            code = code * 100 + part
+        }
+        return if (code > 0) code else 2L
     }
 
     /**
@@ -290,3 +399,4 @@ object AppUpdateManager {
         }
     }
 }
+
