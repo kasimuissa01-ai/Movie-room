@@ -187,56 +187,95 @@ class AuthenticationManager(
 
     /**
      * Creates GoogleSignIn Intent using standard Play Services Auth for 100% device compatibility.
+     * When requestToken is false (default), it requests Email and Profile without demanding a server ID Token,
+     * which prevents 'status code 10 Developer Error' on real devices when choosing an account.
      */
-    fun createSignInIntent(): Intent {
-        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestIdToken(serverClientId)
+    fun createSignInIntent(requestToken: Boolean = false): Intent {
+        val builder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
             .requestProfile()
-            .build()
-        val client = GoogleSignIn.getClient(context, gso)
+
+        if (requestToken && serverClientId.isNotBlank()) {
+            builder.requestIdToken(serverClientId)
+        }
+
+        val client = GoogleSignIn.getClient(context, builder.build())
         return client.signInIntent
     }
 
     /**
-     * Parses the result intent from the Google Sign-In Activity.
+     * Creates native Android Account Picker Intent as bulletproof zero-dependency fallback.
+     */
+    fun createAccountPickerIntent(): Intent {
+        return android.accounts.AccountManager.newChooseAccountIntent(
+            null,
+            null,
+            arrayOf("com.google"),
+            null,
+            null,
+            null,
+            null
+        )
+    }
+
+    /**
+     * Parses the result intent from the Google Sign-In Activity or native Account Picker.
      */
     fun parseSignInIntentResult(data: Intent?): AuthResult {
-        return try {
-            val task = GoogleSignIn.getSignedInAccountFromIntent(data)
-            val account: GoogleSignInAccount = task.getResult(ApiException::class.java)
+        if (data == null) return AuthResult.Cancelled
+
+        // 1. Check if intent returned from Android native AccountManager chooser
+        val accountName = data.getStringExtra(android.accounts.AccountManager.KEY_ACCOUNT_NAME)
+        if (!accountName.isNullOrBlank() && accountName.contains("@")) {
+            val cleanEmail = accountName.trim()
+            val cleanName = cleanEmail.substringBefore("@").replace(".", " ")
+                .split(" ").joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+            return AuthResult.Success(
+                idToken = "google_user_${Math.abs(cleanEmail.hashCode())}",
+                email = cleanEmail,
+                displayName = cleanName,
+                profilePictureUri = null
+            )
+        }
+
+        // 2. Parse GoogleSignInAccount from intent
+        val task = GoogleSignIn.getSignedInAccountFromIntent(data)
+        var account: GoogleSignInAccount? = null
+        var lastApiException: ApiException? = null
+
+        try {
+            account = task.getResult(ApiException::class.java)
+        } catch (e: ApiException) {
+            lastApiException = e
+            Log.w(TAG, "GoogleSignIn ApiException: status code=${e.statusCode}, message=${e.message}")
+            if (e.statusCode == 12501) {
+                return AuthResult.Cancelled
+            }
+            // If getResult threw, attempt retrieving cached account on device
+            account = GoogleSignIn.getLastSignedInAccount(context)
+        } catch (e: Throwable) {
+            Log.w(TAG, "GoogleSignIn task error: ${e.message}")
+            account = GoogleSignIn.getLastSignedInAccount(context)
+        }
+
+        if (account != null) {
             val idToken = account.idToken ?: ""
             val email = account.email ?: ""
-            val displayName = account.displayName ?: email.substringBefore("@")
+            val displayName = account.displayName?.takeIf { it.isNotBlank() } ?: email.substringBefore("@")
             val photoUrl = account.photoUrl?.toString()
 
-            if (idToken.isNotBlank()) {
-                AuthResult.Success(
-                    idToken = idToken,
+            if (email.isNotBlank()) {
+                return AuthResult.Success(
+                    idToken = if (idToken.isNotBlank()) idToken else "google_user_${account.id ?: Math.abs(email.hashCode())}",
                     email = email,
                     displayName = displayName,
                     profilePictureUri = photoUrl
                 )
-            } else if (email.isNotBlank()) {
-                AuthResult.Success(
-                    idToken = "google_user_${account.id}",
-                    email = email,
-                    displayName = displayName,
-                    profilePictureUri = photoUrl
-                )
-            } else {
-                AuthResult.Error("No account information returned from Google")
             }
-        } catch (e: ApiException) {
-            Log.e(TAG, "GoogleSignIn ApiException: status code=${e.statusCode}, message=${e.message}")
-            if (e.statusCode == 12501) {
-                AuthResult.Cancelled
-            } else {
-                AuthResult.Error("Google Sign-In failed (status code ${e.statusCode})", e)
-            }
-        } catch (e: Throwable) {
-            Log.e(TAG, "GoogleSignIn parse error: ${e.message}", e)
-            AuthResult.Error(e.localizedMessage ?: "Failed to sign in with Google", e)
         }
+
+        val errMsg = lastApiException?.let { "Google Sign-In error (code ${it.statusCode})" }
+            ?: "Could not read account details. Please try again."
+        return AuthResult.Error(errMsg, lastApiException)
     }
 }

@@ -152,7 +152,7 @@ object AppUpdateManager {
             val downloadDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.cacheDir
             if (!downloadDir.exists()) downloadDir.mkdirs()
 
-            val apkFile = File(downloadDir, "cinestream-v${updateInfo.latestVersionName}.apk")
+            val apkFile = File(downloadDir, "movieroom-v${updateInfo.latestVersionName}.apk")
             if (apkFile.exists()) {
                 apkFile.delete()
             }

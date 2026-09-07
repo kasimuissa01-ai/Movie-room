@@ -1,5 +1,5 @@
 {
-  "name": "Movie Room",
+  "name": "MovieRoom",
   "description": "A premium cinematic movie streaming and discovery app with trending feeds, offline downloads, watchlist, and personalized cinema player.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

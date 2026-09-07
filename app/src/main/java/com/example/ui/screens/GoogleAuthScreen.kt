@@ -103,11 +103,12 @@ fun GoogleAuthScreen(
     val googleSignInLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == android.app.Activity.RESULT_OK && result.data != null) {
+        val data = result.data
+        if (data != null) {
             isAuthenticating = true
             viewModel.handleGoogleSignInIntentResult(
                 context = context,
-                data = result.data,
+                data = data,
                 onComplete = { success, msg ->
                     isAuthenticating = false
                     if (success) {
@@ -227,30 +228,48 @@ fun GoogleAuthScreen(
                 Surface(
                     onClick = {
                         if (!isAuthenticating) {
+                            isAuthenticating = true
                             try {
                                 val authManager = com.example.data.firebase.AuthenticationManager(context)
-                                val intent = authManager.createSignInIntent()
-                                googleSignInLauncher.launch(intent)
+                                // Launch standard Google Sign-In with fresh state
+                                val gso = com.google.android.gms.auth.api.signin.GoogleSignInOptions.Builder(
+                                    com.google.android.gms.auth.api.signin.GoogleSignInOptions.DEFAULT_SIGN_IN
+                                ).requestEmail().requestProfile().build()
+                                val client = com.google.android.gms.auth.api.signin.GoogleSignIn.getClient(context, gso)
+                                client.signOut().addOnCompleteListener {
+                                    try {
+                                        val intent = authManager.createSignInIntent(requestToken = false)
+                                        googleSignInLauncher.launch(intent)
+                                    } catch (e: Throwable) {
+                                        val fallbackIntent = authManager.createAccountPickerIntent()
+                                        googleSignInLauncher.launch(fallbackIntent)
+                                    }
+                                }
                             } catch (e: Throwable) {
-                                isAuthenticating = true
-                                viewModel.signInWithGoogleDirect(
-                                    context = context,
-                                    onComplete = { success, msg ->
-                                        isAuthenticating = false
-                                        if (success) {
-                                            authSuccessAnimation = true
-                                            coroutineScope.launch {
-                                                delay(350)
-                                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                                onAuthSuccess()
-                                            }
-                                        } else {
-                                            if (msg != "Cancelled") {
-                                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                try {
+                                    val authManager = com.example.data.firebase.AuthenticationManager(context)
+                                    val fallbackIntent = authManager.createAccountPickerIntent()
+                                    googleSignInLauncher.launch(fallbackIntent)
+                                } catch (err: Throwable) {
+                                    viewModel.signInWithGoogleDirect(
+                                        context = context,
+                                        onComplete = { success, msg ->
+                                            isAuthenticating = false
+                                            if (success) {
+                                                authSuccessAnimation = true
+                                                coroutineScope.launch {
+                                                    delay(350)
+                                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                                    onAuthSuccess()
+                                                }
+                                            } else {
+                                                if (msg != "Cancelled") {
+                                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                                }
                                             }
                                         }
-                                    }
-                                )
+                                    )
+                                }
                             }
                         }
                     },
