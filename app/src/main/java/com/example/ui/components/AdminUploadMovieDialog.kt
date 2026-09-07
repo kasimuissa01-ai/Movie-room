@@ -20,20 +20,22 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.CloudDone
-import androidx.compose.material.icons.filled.CloudQueue
-import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -49,22 +51,31 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import coil.compose.AsyncImage
+import com.example.data.tmdb.TmdbClient
+import com.example.model.Movie
 import com.example.ui.MovieViewModel
 import com.example.ui.theme.CineBlack
 import com.example.ui.theme.CineGold
@@ -74,6 +85,9 @@ import com.example.ui.theme.CineSurface
 import com.example.ui.theme.CineSurfaceElevated
 import com.example.ui.theme.CineTextMuted
 import com.example.ui.theme.CineTextPrimary
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun AdminUploadMovieDialog(
@@ -81,28 +95,75 @@ fun AdminUploadMovieDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
 
+    // Autofill Search Query State
+    var searchQuery by remember { mutableStateOf("") }
+    var searchResults by remember { mutableStateOf<List<Movie>>(emptyList()) }
+    var isSearching by remember { mutableStateOf(false) }
+    var searchJob by remember { mutableStateOf<Job?>(null) }
+    var autofillSuccessBanner by remember { mutableStateOf<String?>(null) }
+
+    // Form fields (Auto-populated by TMDB or editable manually)
     var title by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("Action") }
-    var genres by remember { mutableStateOf("Action, Sci-Fi, 4K") }
+    var genres by remember { mutableStateOf("Action, Drama") }
     var year by remember { mutableStateOf("2026") }
-    var durationMinutes by remember { mutableStateOf("125") }
-    var rating by remember { mutableStateOf("8.8") }
+    var durationMinutes by remember { mutableStateOf("120") }
+    var rating by remember { mutableStateOf("8.5") }
 
+    // Media fields
     var selectedVideoUri by remember { mutableStateOf<Uri?>(null) }
     var selectedTrailerUri by remember { mutableStateOf<Uri?>(null) }
     var selectedPosterUri by remember { mutableStateOf<Uri?>(null) }
-    var directVideoUrl by remember { mutableStateOf("https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4") }
+    var directVideoUrl by remember { mutableStateOf("") }
     var directTrailerUrl by remember { mutableStateOf("") }
-    var directPosterUrl by remember { mutableStateOf("https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=800&q=80") }
+    var directPosterUrl by remember { mutableStateOf("") }
 
     val isUploading = viewModel.isUploading.value
     val uploadProgress = viewModel.uploadProgress.value
     val uploadStatusText = viewModel.uploadStatusText.value
 
-    val isR2Configured = viewModel.isR2Configured
-    val r2Bucket = viewModel.r2BucketName
+    // Auto-search TMDB as user types in the title / search bar
+    fun triggerTmdbSearch(query: String) {
+        searchJob?.cancel()
+        if (query.trim().length < 2) {
+            searchResults = emptyList()
+            isSearching = false
+            return
+        }
+        searchJob = coroutineScope.launch {
+            delay(350)
+            isSearching = true
+            try {
+                val results = TmdbClient.searchMovies(query.trim())
+                searchResults = results
+            } catch (e: Exception) {
+                searchResults = emptyList()
+            } finally {
+                isSearching = false
+            }
+        }
+    }
+
+    // Function to populate all fields from a selected TMDB movie
+    fun applyTmdbMovie(movie: Movie) {
+        title = movie.title
+        description = movie.description
+        category = movie.category.ifBlank { "Action" }
+        genres = if (movie.genres.isNotEmpty()) movie.genres.joinToString(", ") else "Movie"
+        year = movie.year.toString()
+        durationMinutes = movie.durationMinutes.toString()
+        rating = movie.rating.toString()
+        directPosterUrl = movie.posterUrl
+        directTrailerUrl = movie.trailerUrl
+        autofillSuccessBanner = "Filled details for \"${movie.title}\""
+        searchResults = emptyList()
+        searchQuery = movie.title
+        focusManager.clearFocus()
+    }
 
     // Video media picker using zero-permission Photo Picker
     val videoPickerLauncher = rememberLauncherForActivityResult(
@@ -149,7 +210,7 @@ fun AdminUploadMovieDialog(
                     .fillMaxSize()
                     .padding(horizontal = 20.dp, vertical = 16.dp)
             ) {
-                // Header Bar
+                // Header Bar (Clean, simple, non-technical)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -164,38 +225,22 @@ fun AdminUploadMovieDialog(
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Default.CloudUpload,
-                                contentDescription = "Admin Upload",
+                                imageVector = Icons.Default.Movie,
+                                contentDescription = "Upload Movie",
                                 tint = CineRedPrimary,
                                 modifier = Modifier.size(22.dp)
                             )
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "Upload Movie",
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = CineTextPrimary
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(CineRedPrimary)
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = "ADMIN",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Black,
-                                        color = Color.White
-                                    )
-                                }
-                            }
                             Text(
-                                text = "Cloudflare R2 Object Storage",
+                                text = "Add New Movie",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = CineTextPrimary
+                            )
+                            Text(
+                                text = "Search to auto-fill details, or fill manually",
                                 fontSize = 12.sp,
                                 color = CineTextMuted
                             )
@@ -216,54 +261,182 @@ fun AdminUploadMovieDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Cloudflare R2 Storage Status Card
+                // TMDB Auto-Fill Smart Search Box
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = CineSurfaceElevated)
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = CineSurfaceElevated),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, CineGold.copy(alpha = 0.4f))
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
                             Icon(
-                                imageVector = Icons.Default.Storage,
+                                imageVector = Icons.Default.AutoAwesome,
                                 contentDescription = null,
-                                tint = if (isR2Configured) CineGreen else CineGold,
-                                modifier = Modifier.size(20.dp)
+                                tint = CineGold,
+                                modifier = Modifier.size(18.dp)
                             )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Column {
-                                Text(
-                                    text = "R2 Bucket: $r2Bucket",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = CineTextPrimary
-                                )
-                                Text(
-                                    text = if (isR2Configured) "Active AWS SigV4 R2 Pipeline" else "Demo Mode (Set R2 in Secrets panel)",
-                                    fontSize = 11.sp,
-                                    color = if (isR2Configured) CineGreen else CineGold
-                                )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Auto-Fill with TMDB Movie Search",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = CineGold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = {
+                                searchQuery = it
+                                triggerTmdbSearch(it)
+                            },
+                            placeholder = { Text("Search movie name (e.g. Inception, Avatar, Dune)...", fontSize = 13.sp) },
+                            singleLine = true,
+                            leadingIcon = {
+                                if (isSearching) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        color = CineGold,
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.Search,
+                                        contentDescription = "Search",
+                                        tint = CineGold,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            },
+                            trailingIcon = {
+                                if (searchQuery.isNotBlank()) {
+                                    IconButton(onClick = {
+                                        searchQuery = ""
+                                        searchResults = emptyList()
+                                    }) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Clear",
+                                            tint = CineTextMuted,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(onSearch = {
+                                triggerTmdbSearch(searchQuery)
+                                focusManager.clearFocus()
+                            }),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("admin_tmdb_search_input"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = CineTextPrimary,
+                                unfocusedTextColor = CineTextPrimary,
+                                focusedBorderColor = CineGold,
+                                unfocusedBorderColor = CineGold.copy(alpha = 0.3f),
+                                focusedContainerColor = CineSurface,
+                                unfocusedContainerColor = CineSurface,
+                                cursorColor = CineGold
+                            )
+                        )
+
+                        // TMDB Live Results Horizontal Selector
+                        if (searchResults.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = "Tap a movie to auto-fill title, cover, and synopsis:",
+                                fontSize = 11.sp,
+                                color = CineTextMuted
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                items(searchResults) { tmdbMovie ->
+                                    Card(
+                                        modifier = Modifier
+                                            .width(130.dp)
+                                            .clickable { applyTmdbMovie(tmdbMovie) },
+                                        shape = RoundedCornerShape(10.dp),
+                                        colors = CardDefaults.cardColors(containerColor = CineSurface),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, CineRedPrimary.copy(alpha = 0.6f))
+                                    ) {
+                                        Column {
+                                            AsyncImage(
+                                                model = tmdbMovie.posterUrl,
+                                                contentDescription = tmdbMovie.title,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(80.dp)
+                                                    .clip(RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp))
+                                                    .background(CineSurface)
+                                            )
+                                            Column(modifier = Modifier.padding(6.dp)) {
+                                                Text(
+                                                    text = tmdbMovie.title,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = CineTextPrimary,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Star,
+                                                        contentDescription = null,
+                                                        tint = CineGold,
+                                                        modifier = Modifier.size(10.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(3.dp))
+                                                    Text(
+                                                        text = "${tmdbMovie.rating} • ${tmdbMovie.year}",
+                                                        fontSize = 10.sp,
+                                                        color = CineTextMuted
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
 
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (isR2Configured) CineGreen.copy(alpha = 0.2f) else CineGold.copy(alpha = 0.2f))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text(
-                                text = if (isR2Configured) "R2 ONLINE" else "READY",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isR2Configured) CineGreen else CineGold
-                            )
+                        // Success feedback toast inside card
+                        if (autofillSuccessBanner != null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(CineGreen.copy(alpha = 0.15f))
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = CineGreen,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = autofillSuccessBanner ?: "",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = CineGreen
+                                )
+                            }
                         }
                     }
                 }
@@ -282,7 +455,7 @@ fun AdminUploadMovieDialog(
                     OutlinedTextField(
                         value = title,
                         onValueChange = { title = it },
-                        placeholder = { Text("e.g. Cyberpunk: Neon Dawn") },
+                        placeholder = { Text("e.g. Inception") },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -294,13 +467,13 @@ fun AdminUploadMovieDialog(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     // Description / Synopsis
-                    Text("Synopsis / Description", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CineTextPrimary)
+                    Text("Story / Description", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CineTextPrimary)
                     Spacer(modifier = Modifier.height(4.dp))
                     OutlinedTextField(
                         value = description,
                         onValueChange = { description = it },
-                        placeholder = { Text("Enter movie overview...") },
-                        maxLines = 3,
+                        placeholder = { Text("Movie story summary...") },
+                        maxLines = 4,
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("admin_upload_description_input"),
@@ -364,7 +537,7 @@ fun AdminUploadMovieDialog(
                         }
 
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Duration (m)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CineTextPrimary)
+                            Text("Duration (mins)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CineTextPrimary)
                             Spacer(modifier = Modifier.height(4.dp))
                             OutlinedTextField(
                                 value = durationMinutes,
@@ -392,18 +565,106 @@ fun AdminUploadMovieDialog(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(18.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
 
-                    // Section: Video Media
+                    // Section: Cover / Poster Image
                     Text(
-                        text = "Movie Video File (Cloudflare R2)",
+                        text = "Cover Image",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = CineTextPrimary
                     )
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Video file selector button
+                    // Poster Preview & Selection Card
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = CineSurface),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (directPosterUrl.isNotBlank() || selectedPosterUri != null) CineGreen else Color(0x33FFFFFF)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (directPosterUrl.isNotBlank() || selectedPosterUri != null) {
+                                AsyncImage(
+                                    model = selectedPosterUri ?: directPosterUrl,
+                                    contentDescription = "Cover Preview",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .size(54.dp, 75.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(CineSurfaceElevated)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Image,
+                                    contentDescription = null,
+                                    tint = CineGold,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                            }
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (directPosterUrl.isNotBlank() || selectedPosterUri != null) "Cover Image Ready" else "No cover selected",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = CineTextPrimary
+                                )
+                                Text(
+                                    text = if (directPosterUrl.isNotBlank()) "Auto-filled from TMDB" else if (selectedPosterUri != null) "Selected from device" else "Auto-fills when you search, or pick a file",
+                                    fontSize = 11.sp,
+                                    color = if (directPosterUrl.isNotBlank()) CineGreen else CineTextMuted,
+                                    maxLines = 1
+                                )
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    imagePickerLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = CineGold)
+                            ) {
+                                Text("Choose File", fontSize = 11.sp)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    OutlinedTextField(
+                        value = directPosterUrl,
+                        onValueChange = { directPosterUrl = it },
+                        placeholder = { Text("Or paste image link (https://...)", fontSize = 12.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = outlinedFieldColors()
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Section: Full Video File
+                    Text(
+                        text = "Movie Video",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = CineTextPrimary
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -416,7 +677,7 @@ fun AdminUploadMovieDialog(
                         colors = CardDefaults.cardColors(containerColor = CineSurface),
                         border = androidx.compose.foundation.BorderStroke(
                             1.dp,
-                            if (selectedVideoUri != null) CineGreen else Color(0x33FFFFFF)
+                            if (selectedVideoUri != null || directVideoUrl.isNotBlank()) CineGreen else Color(0x33FFFFFF)
                         )
                     ) {
                         Row(
@@ -426,21 +687,21 @@ fun AdminUploadMovieDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                imageVector = if (selectedVideoUri != null) Icons.Default.CheckCircle else Icons.Default.Videocam,
+                                imageVector = if (selectedVideoUri != null || directVideoUrl.isNotBlank()) Icons.Default.CheckCircle else Icons.Default.Videocam,
                                 contentDescription = null,
-                                tint = if (selectedVideoUri != null) CineGreen else CineRedPrimary,
+                                tint = if (selectedVideoUri != null || directVideoUrl.isNotBlank()) CineGreen else CineRedPrimary,
                                 modifier = Modifier.size(24.dp)
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = if (selectedVideoUri != null) "Video File Selected" else "Select Movie Video File (MP4/MKV)",
+                                    text = if (selectedVideoUri != null) "Video File Selected" else if (directVideoUrl.isNotBlank()) "Video Link Configured" else "Select Video File (MP4/MKV)",
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = CineTextPrimary
                                 )
                                 Text(
-                                    text = if (selectedVideoUri != null) selectedVideoUri?.lastPathSegment ?: "Ready to upload" else "Tap to choose from device gallery or storage",
+                                    text = if (selectedVideoUri != null) selectedVideoUri?.lastPathSegment ?: "Ready to play" else if (directVideoUrl.isNotBlank()) "Direct link provided below" else "Tap to choose video from your phone",
                                     fontSize = 11.sp,
                                     color = CineTextMuted,
                                     maxLines = 1
@@ -449,14 +710,12 @@ fun AdminUploadMovieDialog(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
 
-                    // Or direct video stream URL
                     OutlinedTextField(
                         value = directVideoUrl,
                         onValueChange = { directVideoUrl = it },
-                        label = { Text("Or Cloudflare R2 Direct Streaming URL") },
-                        placeholder = { Text("https://pub-xxx.r2.dev/movies/movie.mp4") },
+                        placeholder = { Text("Or paste video link (https://...)", fontSize = 12.sp) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(10.dp),
@@ -465,9 +724,9 @@ fun AdminUploadMovieDialog(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Section: Trailer Video (Short preview)
+                    // Section: Trailer (Optional)
                     Text(
-                        text = "Movie Trailer (Short Preview Video)",
+                        text = "Movie Trailer (Optional)",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = CineTextPrimary
@@ -486,7 +745,7 @@ fun AdminUploadMovieDialog(
                         colors = CardDefaults.cardColors(containerColor = CineSurface),
                         border = androidx.compose.foundation.BorderStroke(
                             1.dp,
-                            if (selectedTrailerUri != null) CineGreen else Color(0x33FFFFFF)
+                            if (selectedTrailerUri != null || directTrailerUrl.isNotBlank()) CineGreen else Color(0x33FFFFFF)
                         )
                     ) {
                         Row(
@@ -496,21 +755,21 @@ fun AdminUploadMovieDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                imageVector = if (selectedTrailerUri != null) Icons.Default.CheckCircle else Icons.Default.Videocam,
+                                imageVector = if (selectedTrailerUri != null || directTrailerUrl.isNotBlank()) Icons.Default.CheckCircle else Icons.Default.Videocam,
                                 contentDescription = null,
-                                tint = if (selectedTrailerUri != null) CineGreen else CineGold,
+                                tint = if (selectedTrailerUri != null || directTrailerUrl.isNotBlank()) CineGreen else CineGold,
                                 modifier = Modifier.size(24.dp)
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = if (selectedTrailerUri != null) "Trailer Video Selected" else "Pick Short Trailer Video (MP4/MKV)",
+                                    text = if (selectedTrailerUri != null) "Trailer Video Selected" else if (directTrailerUrl.isNotBlank()) "Trailer Link Auto-Filled" else "Choose Trailer Video (Optional)",
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = CineTextPrimary
                                 )
                                 Text(
-                                    text = if (selectedTrailerUri != null) selectedTrailerUri?.lastPathSegment ?: "Ready to upload" else "Short teaser / preview that auto-plays on movie page",
+                                    text = if (selectedTrailerUri != null) selectedTrailerUri?.lastPathSegment ?: "Ready" else if (directTrailerUrl.isNotBlank()) "Auto-filled or custom trailer link" else "Short preview video that plays automatically",
                                     fontSize = 11.sp,
                                     color = CineTextMuted,
                                     maxLines = 1
@@ -519,82 +778,12 @@ fun AdminUploadMovieDialog(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
 
                     OutlinedTextField(
                         value = directTrailerUrl,
                         onValueChange = { directTrailerUrl = it },
-                        label = { Text("Or Direct Trailer Streaming URL") },
-                        placeholder = { Text("https://pub-xxx.r2.dev/trailers/trailer.mp4") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp),
-                        colors = outlinedFieldColors()
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Section: Poster Image
-                    Text(
-                        text = "Movie Poster Artwork",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = CineTextPrimary
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                imagePickerLauncher.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            },
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = CineSurface),
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            if (selectedPosterUri != null) CineGreen else Color(0x33FFFFFF)
-                        )
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = if (selectedPosterUri != null) Icons.Default.CheckCircle else Icons.Default.Image,
-                                contentDescription = null,
-                                tint = if (selectedPosterUri != null) CineGreen else CineGold,
-                                modifier = Modifier.size(24.dp)
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = if (selectedPosterUri != null) "Poster Image Selected" else "Pick Poster Artwork Image",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = CineTextPrimary
-                                )
-                                Text(
-                                    text = if (selectedPosterUri != null) selectedPosterUri?.lastPathSegment ?: "Ready to upload" else "Tap to choose image file",
-                                    fontSize = 11.sp,
-                                    color = CineTextMuted,
-                                    maxLines = 1
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    OutlinedTextField(
-                        value = directPosterUrl,
-                        onValueChange = { directPosterUrl = it },
-                        label = { Text("Or Poster Image URL") },
-                        placeholder = { Text("https://image.tmdb.org/... or https://...") },
+                        placeholder = { Text("Or paste trailer link (https://...)", fontSize = 12.sp) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(10.dp),
@@ -616,7 +805,7 @@ fun AdminUploadMovieDialog(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = uploadStatusText.ifBlank { "Uploading to Cloudflare R2..." },
+                                text = uploadStatusText.ifBlank { "Saving movie..." },
                                 fontSize = 12.sp,
                                 color = CineGold,
                                 fontWeight = FontWeight.Medium
@@ -658,7 +847,7 @@ fun AdminUploadMovieDialog(
                     Button(
                         onClick = {
                             if (title.isBlank()) {
-                                Toast.makeText(context, "Please enter movie title", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Please enter or select a movie title", Toast.LENGTH_SHORT).show()
                                 return@Button
                             }
 
@@ -702,15 +891,15 @@ fun AdminUploadMovieDialog(
                                 strokeWidth = 2.dp
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Uploading...")
+                            Text("Saving...")
                         } else {
                             Icon(
-                                imageVector = Icons.Default.CloudUpload,
+                                imageVector = Icons.Default.Movie,
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Upload & Publish")
+                            Text("Save & Publish Movie")
                         }
                     }
                 }

@@ -150,7 +150,7 @@ fun HomeScreen(
                                 }
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = "Tap here to upload movies directly to Cloudflare R2 storage.",
+                                    text = "Tap here to add and publish new movies to the catalog.",
                                     fontSize = 12.sp,
                                     color = CineTextMuted
                                 )
@@ -161,13 +161,13 @@ fun HomeScreen(
                 }
             }
 
-            // Section for Admin Uploaded Movies from Cloudflare R2
+            // Section for Admin Uploaded Movies
             if (uploadedMovies.isNotEmpty()) {
                 item(key = "admin_r2_movies_section") {
                     CategorySection(
-                        title = "Cloudflare R2 Cinema (Uploaded)",
+                        title = "Featured Uploads",
                         movies = uploadedMovies,
-                        onSeeAllClick = { onSeeAllClick("uploaded", "Cloudflare R2 Cinema") },
+                        onSeeAllClick = { onSeeAllClick("uploaded", "Featured Uploads") },
                         onMovieClick = onMovieClick
                     )
                 }

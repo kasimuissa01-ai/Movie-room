@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
 class MovieViewModel(application: Application) : AndroidViewModel(application) {
@@ -38,6 +39,15 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         private const val TAG = "MovieViewModel"
         const val ADMIN_EMAIL = "grapherkidd0@gmail.com"
+        const val ADMIN_PHONE = "0696102700"
+    }
+
+    private fun isPhoneMatchingAdmin(rawPhone: String): Boolean {
+        val digits = rawPhone.replace("+", "").replace(" ", "").replace("-", "").trim()
+        val targetDigits = ADMIN_PHONE.replace("+", "").replace(" ", "").replace("-", "").trim()
+        return digits == targetDigits || 
+               digits == "255${targetDigits.removePrefix("0")}" ||
+               targetDigits == "0${digits.removePrefix("255")}"
     }
 
     private val prefs = application.getSharedPreferences("cinestream_prefs", Context.MODE_PRIVATE)
@@ -52,9 +62,11 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     val r2BucketName: String get() = R2Config.bucketName
     val r2PublicUrlBase: String get() = R2Config.publicUrlBase
 
-    // Admin Session State - strictly authorized for grapherkidd0@gmail.com
+    // Admin Session State - strictly authorized for grapherkidd0@gmail.com and phone 0696102700
     private val _isAdminLoggedIn = MutableStateFlow(
-        (prefs.getString("google_user_email", "") ?: "").trim().equals(ADMIN_EMAIL, ignoreCase = true)
+        (prefs.getString("google_user_email", "") ?: "").trim().equals(ADMIN_EMAIL, ignoreCase = true) ||
+        isPhoneMatchingAdmin(prefs.getString("user_phone_number", "") ?: "") ||
+        prefs.getBoolean("admin_logged_in", false)
     )
     val isAdminLoggedIn: StateFlow<Boolean> = _isAdminLoggedIn.asStateFlow()
 
@@ -68,6 +80,11 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         prefs.getString("google_user_name", "") ?: ""
     )
     val userDisplayName: StateFlow<String> = _userDisplayName.asStateFlow()
+
+    private val _userPhoneNumber = MutableStateFlow(
+        prefs.getString("user_phone_number", "") ?: ""
+    )
+    val userPhoneNumber: StateFlow<String> = _userPhoneNumber.asStateFlow()
 
     private val _userEmail = MutableStateFlow(
         prefs.getString("google_user_email", "") ?: ""
@@ -513,6 +530,67 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun signInWithPhoneAndName(
+        context: Context,
+        name: String,
+        phoneNumber: String,
+        onComplete: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
+        val cleanName = name.trim()
+        val cleanPhone = phoneNumber.trim()
+        val syntheticEmail = "phone_${cleanPhone.replace("+", "").replace(" ", "").replace("-", "")}@cinestream.app"
+        val isAdmin = cleanEmailMatchesAdmin(syntheticEmail) || isPhoneMatchingAdmin(cleanPhone)
+
+        // 1. Immediately persist credentials locally to guarantee instant login
+        prefs.edit()
+            .putBoolean("google_signed_in", true)
+            .putString("google_user_name", cleanName)
+            .putString("user_phone_number", cleanPhone)
+            .putString("google_user_email", cleanPhone)
+            .putString("google_user_photo", "")
+            .putBoolean("google_firestore_synced", false)
+            .putBoolean("admin_logged_in", isAdmin)
+            .apply()
+
+        // 2. Update reactive state flows immediately
+        _isGoogleSignedIn.value = true
+        _userDisplayName.value = cleanName
+        _userPhoneNumber.value = cleanPhone
+        _userEmail.value = cleanPhone
+        _userPhotoUrl.value = ""
+        _isFirestoreSynced.value = false
+        _isAdminLoggedIn.value = isAdmin
+
+        // 3. Immediately invoke completion callback so UI opens without delay
+        onComplete(true, "Karibu $cleanName!")
+
+        // 4. Background cloud sync without blocking the user
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                withTimeoutOrNull(3000L) {
+                    val result = FirebaseAuthManager.signInWithAccountDetails(
+                        context = context,
+                        email = syntheticEmail,
+                        displayName = cleanName,
+                        photoUrl = ""
+                    )
+                    val synced = result is GoogleAuthResult.Success && result.user.firestoreSynced
+                    if (synced) {
+                        prefs.edit().putBoolean("google_firestore_synced", true).apply()
+                        _isFirestoreSynced.value = true
+                    }
+                }
+                loadFirestoreUsers(context)
+            } catch (e: Exception) {
+                Log.w(TAG, "Background Firestore sync optional warning: ${e.message}")
+            }
+        }
+    }
+
+    private fun cleanEmailMatchesAdmin(email: String): Boolean {
+        return email.trim().equals(ADMIN_EMAIL, ignoreCase = true)
+    }
+
     fun signOutGoogle(context: Context? = null) {
         if (context != null) {
             FirebaseAuthManager.signOut(context)
@@ -520,6 +598,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit()
             .putBoolean("google_signed_in", false)
             .putString("google_user_name", "")
+            .putString("user_phone_number", "")
             .putString("google_user_email", "")
             .putString("google_user_photo", "")
             .putBoolean("google_firestore_synced", false)
@@ -527,6 +606,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
             .apply()
         _isGoogleSignedIn.value = false
         _userDisplayName.value = ""
+        _userPhoneNumber.value = ""
         _userEmail.value = ""
         _userPhotoUrl.value = ""
         _isFirestoreSynced.value = false

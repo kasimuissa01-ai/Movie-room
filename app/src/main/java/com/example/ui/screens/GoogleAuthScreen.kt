@@ -2,14 +2,14 @@ package com.example.ui.screens
 
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -26,27 +27,26 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,29 +54,25 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.ui.MovieViewModel
-import com.example.ui.theme.CineCardBorder
-import com.example.ui.theme.CineGold
 import com.example.ui.theme.CineGreen
-import com.example.ui.theme.CineSurface
-import com.example.ui.theme.CineSurfaceElevated
-import com.example.ui.theme.CineTextMuted
-import com.example.ui.theme.CineTextPrimary
-import com.example.ui.theme.CineTextSecondary
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -90,97 +86,38 @@ fun GoogleAuthScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
 
+    var fullNameInput by remember { mutableStateOf("") }
+    var phoneInput by remember { mutableStateOf("") }
     var isAuthenticating by remember { mutableStateOf(false) }
-    var authSuccessAnimation by remember { mutableStateOf(false) }
-    var showAccountChooserDialog by remember { mutableStateOf(false) }
-    var isSignUpMode by remember { mutableStateOf(false) }
-    var emailInput by remember { mutableStateOf("") }
-    var passwordInput by remember { mutableStateOf("") }
-    var nameInput by remember { mutableStateOf("") }
-    var authErrorMessage by remember { mutableStateOf<String?>(null) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isNameFocused by remember { mutableStateOf(false) }
+    var isPhoneFocused by remember { mutableStateOf(false) }
 
-    val accountPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val data = result.data
-        if (data != null) {
-            isAuthenticating = true
-            viewModel.handleGoogleSignInIntentResult(
-                context = context,
-                data = data,
-                onComplete = { success, msg ->
-                    isAuthenticating = false
-                    if (success) {
-                        authSuccessAnimation = true
-                        coroutineScope.launch {
-                            delay(350)
-                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                            onAuthSuccess()
-                        }
-                    } else {
-                        if (msg != "Cancelled" && msg != "Sign-in cancelled") {
-                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                }
-            )
-        } else {
-            isAuthenticating = false
-        }
+    var isVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        isVisible = true
     }
 
-    val googleSignInLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val data = result.data
-        if (data != null) {
-            isAuthenticating = true
-            viewModel.handleGoogleSignInIntentResult(
-                context = context,
-                data = data,
-                onComplete = { success, msg ->
-                    if (success) {
-                        isAuthenticating = false
-                        authSuccessAnimation = true
-                        coroutineScope.launch {
-                            delay(350)
-                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                            onAuthSuccess()
-                        }
-                    } else {
-                        // If Google Play Services returns code 10 (Developer Error: SHA-1/OAuth mismatch),
-                        // automatically fall back to the native Android account chooser
-                        if (msg.contains("code 10") || msg.contains("Code 10") || msg.contains("Developer Error")) {
-                            try {
-                                val authManager = com.example.data.firebase.AuthenticationManager(context)
-                                val fallbackIntent = authManager.createAccountPickerIntent()
-                                accountPickerLauncher.launch(fallbackIntent)
-                            } catch (e: Throwable) {
-                                isAuthenticating = false
-                                Toast.makeText(context, "Select your Google Account:", Toast.LENGTH_SHORT).show()
-                                showAccountChooserDialog = true
-                            }
-                        } else {
-                            isAuthenticating = false
-                            if (msg != "Cancelled" && msg != "Sign-in cancelled") {
-                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    }
-                }
-            )
-        } else {
-            isAuthenticating = false
-        }
-    }
+    val nameCardElevation by animateFloatAsState(
+        targetValue = if (isNameFocused) 14f else 6f,
+        animationSpec = tween(250),
+        label = "name_elevation"
+    )
+
+    val phoneCardElevation by animateFloatAsState(
+        targetValue = if (isPhoneFocused) 14f else 6f,
+        animationSpec = tween(250),
+        label = "phone_elevation"
+    )
 
     Box(
         modifier = modifier
             .fillMaxSize()
             .testTag("google_auth_screen")
     ) {
-        // 1. Wallpaper background
+        // 1. Cinematic illustration background kept clearly visible without heavy dark overlays
         Image(
             painter = painterResource(id = R.drawable.img_auth_bg),
             contentDescription = null,
@@ -188,16 +125,16 @@ fun GoogleAuthScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        // 2. Subtle gradient overlay
+        // 2. Light, subtle gradient at bottom so illustration shines through
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
-                            Color.Black.copy(alpha = 0.35f),
+                            Color.Black.copy(alpha = 0.15f),
                             Color.Transparent,
-                            Color.Black.copy(alpha = 0.55f)
+                            Color.Black.copy(alpha = 0.50f)
                         ),
                         startY = 0f,
                         endY = Float.POSITIVE_INFINITY
@@ -205,7 +142,7 @@ fun GoogleAuthScreen(
                 )
         )
 
-        // 3. Optional dismiss / close button
+        // 3. Dismiss button if accessible from Profile
         if (canDismiss) {
             IconButton(
                 onClick = onSkipGuest,
@@ -215,409 +152,285 @@ fun GoogleAuthScreen(
                     .padding(16.dp)
                     .testTag("auth_dismiss_button")
             ) {
-                Icon(
-                    imageVector = Icons.Default.Close,
-                    contentDescription = "Dismiss",
-                    tint = Color.White.copy(alpha = 0.9f)
-                )
+                Surface(
+                    shape = CircleShape,
+                    color = Color.Black.copy(alpha = 0.35f),
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Dismiss",
+                        tint = Color.White,
+                        modifier = Modifier.padding(8.dp)
+                    )
+                }
             }
         }
 
-        // 4. Foreground Content Layout
-        Column(
+        // 4. Clean bottom sheet layout with 2 white round border cards
+        AnimatedVisibility(
+            visible = isVisible,
+            enter = fadeIn(tween(400)) + slideInVertically(
+                animationSpec = tween(400, easing = FastOutSlowInEasing),
+                initialOffsetY = { it / 3 }
+            ),
             modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .padding(horizontal = 24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
         ) {
-            // TOP SECTION: Header Typography
+            val scrollState = rememberScrollState()
             Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = if (canDismiss) 16.dp else 40.dp)
-            ) {
-                Text(
-                    text = "Welcome to the",
-                    color = Color.White,
-                    fontSize = 32.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Serif,
-                    letterSpacing = 0.5.sp,
-                    textAlign = TextAlign.Center
-                )
-                Text(
-                    text = "movie universe",
-                    color = Color.White,
-                    fontSize = 32.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Serif,
-                    letterSpacing = 0.5.sp,
-                    textAlign = TextAlign.Center
-                )
-            }
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            // BOTTOM SECTION: Google Auth Button, Supabase Email Sign In, & Guest Entry
-            Column(
+                    .imePadding()
+                    .navigationBarsPadding()
+                    .verticalScroll(scrollState)
+                    .padding(horizontal = 22.dp, vertical = 24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 36.dp)
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // Direct Google Authentication Button
+                // CARD 1: Round border white card for NAME
                 Surface(
+                    shape = RoundedCornerShape(26.dp),
+                    color = Color.White,
+                    border = BorderStroke(
+                        width = if (isNameFocused) 2.dp else 1.dp,
+                        color = if (isNameFocused) CineGreen else Color.White.copy(alpha = 0.9f)
+                    ),
+                    shadowElevation = nameCardElevation.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .shadow(nameCardElevation.dp, RoundedCornerShape(26.dp))
+                        .testTag("auth_name_card")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 18.dp, vertical = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = "Name",
+                            tint = if (isNameFocused) CineGreen else Color(0xFF64748B),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        TextField(
+                            value = fullNameInput,
+                            onValueChange = {
+                                fullNameInput = it
+                                errorMessage = null
+                            },
+                            textStyle = TextStyle(
+                                color = Color.Black,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Normal
+                            ),
+                            placeholder = {
+                                Text(
+                                    text = "Name",
+                                    color = Color(0xFF64748B),
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Normal
+                                )
+                            },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Text,
+                                imeAction = ImeAction.Next
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onNext = { focusManager.moveFocus(FocusDirection.Down) }
+                            ),
+                            colors = TextFieldDefaults.colors(
+                                focusedTextColor = Color.Black,
+                                unfocusedTextColor = Color.Black,
+                                disabledTextColor = Color.Black,
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                cursorColor = Color.Black
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { isNameFocused = it.isFocused }
+                                .testTag("auth_name_input")
+                        )
+                    }
+                }
+
+                // CARD 2: Round border white card for PHONE NUMBER
+                Surface(
+                    shape = RoundedCornerShape(26.dp),
+                    color = Color.White,
+                    border = BorderStroke(
+                        width = if (isPhoneFocused) 2.dp else 1.dp,
+                        color = if (isPhoneFocused) CineGreen else Color.White.copy(alpha = 0.9f)
+                    ),
+                    shadowElevation = phoneCardElevation.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .shadow(phoneCardElevation.dp, RoundedCornerShape(26.dp))
+                        .testTag("auth_phone_card")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 18.dp, vertical = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Phone,
+                            contentDescription = "Phone",
+                            tint = if (isPhoneFocused) CineGreen else Color(0xFF64748B),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        TextField(
+                            value = phoneInput,
+                            onValueChange = {
+                                phoneInput = it
+                                errorMessage = null
+                            },
+                            textStyle = TextStyle(
+                                color = Color.Black,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Normal
+                            ),
+                            placeholder = {
+                                Text(
+                                    text = "Phone Number",
+                                    color = Color(0xFF64748B),
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Normal
+                                )
+                            },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Phone,
+                                imeAction = ImeAction.Done
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onDone = { focusManager.clearFocus() }
+                            ),
+                            colors = TextFieldDefaults.colors(
+                                focusedTextColor = Color.Black,
+                                unfocusedTextColor = Color.Black,
+                                disabledTextColor = Color.Black,
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                cursorColor = Color.Black
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { isPhoneFocused = it.isFocused }
+                                .testTag("auth_phone_input")
+                        )
+                    }
+                }
+
+                // Error message (clean & minimal)
+                errorMessage?.let { msg ->
+                    Text(
+                        text = msg,
+                        color = Color(0xFFFF5252),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(2.dp))
+
+                // Clean Continue Button
+                Button(
                     onClick = {
-                        if (!isAuthenticating) {
-                            isAuthenticating = true
-                            try {
-                                val authManager = com.example.data.firebase.AuthenticationManager(context)
-                                // Launch standard Google Sign-In with fresh state
-                                val gso = com.google.android.gms.auth.api.signin.GoogleSignInOptions.Builder(
-                                    com.google.android.gms.auth.api.signin.GoogleSignInOptions.DEFAULT_SIGN_IN
-                                ).requestEmail().requestProfile().build()
-                                val client = com.google.android.gms.auth.api.signin.GoogleSignIn.getClient(context, gso)
-                                client.signOut().addOnCompleteListener {
-                                    try {
-                                        val intent = authManager.createSignInIntent(requestToken = false)
-                                        googleSignInLauncher.launch(intent)
-                                    } catch (e: Throwable) {
-                                        val fallbackIntent = authManager.createAccountPickerIntent()
-                                        googleSignInLauncher.launch(fallbackIntent)
-                                    }
+                        focusManager.clearFocus()
+                        if (fullNameInput.trim().isBlank()) {
+                            errorMessage = "Please enter your name"
+                            return@Button
+                        }
+                        if (phoneInput.trim().length < 6) {
+                            errorMessage = "Please enter a valid phone number"
+                            return@Button
+                        }
+
+                        isAuthenticating = true
+                        errorMessage = null
+
+                        viewModel.signInWithPhoneAndName(
+                            context = context,
+                            name = fullNameInput.trim(),
+                            phoneNumber = phoneInput.trim()
+                        ) { success, msg ->
+                            isAuthenticating = false
+                            if (success) {
+                                coroutineScope.launch {
+                                    delay(200)
+                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                    onAuthSuccess()
                                 }
-                            } catch (e: Throwable) {
-                                try {
-                                    val authManager = com.example.data.firebase.AuthenticationManager(context)
-                                    val fallbackIntent = authManager.createAccountPickerIntent()
-                                    googleSignInLauncher.launch(fallbackIntent)
-                                } catch (err: Throwable) {
-                                    viewModel.signInWithGoogleDirect(
-                                        context = context,
-                                        onComplete = { success, msg ->
-                                            isAuthenticating = false
-                                            if (success) {
-                                                authSuccessAnimation = true
-                                                coroutineScope.launch {
-                                                    delay(350)
-                                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                                    onAuthSuccess()
-                                                }
-                                            } else {
-                                                if (msg != "Cancelled") {
-                                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        }
-                                    )
-                                }
+                            } else {
+                                errorMessage = msg
                             }
                         }
                     },
-                    shape = RoundedCornerShape(16.dp),
-                    color = Color.Black.copy(alpha = 0.35f),
-                    border = BorderStroke(2.dp, Color.White),
+                    enabled = !isAuthenticating,
+                    shape = RoundedCornerShape(26.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CineGreen,
+                        disabledContainerColor = CineGreen.copy(alpha = 0.6f)
+                    ),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .shadow(12.dp, RoundedCornerShape(16.dp), spotColor = Color.Black.copy(alpha = 0.6f))
-                        .testTag("google_auth_button")
+                        .height(52.dp)
+                        .testTag("auth_submit_phone_button")
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 15.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        if (isAuthenticating) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(24.dp),
-                                color = Color.White,
-                                strokeWidth = 2.5.dp
-                            )
-                            Spacer(modifier = Modifier.width(14.dp))
+                    if (isAuthenticating) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(22.dp),
+                            color = Color.White,
+                            strokeWidth = 2.5.dp
+                        )
+                    } else {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
                             Text(
-                                text = "Connecting with Google...",
+                                text = "Continue",
                                 color = Color.White,
                                 fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.SemiBold
                             )
-                        } else {
-                            Image(
-                                painter = painterResource(id = R.drawable.ic_google_logo),
-                                contentDescription = "Google Logo",
-                                modifier = Modifier.size(28.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
                             )
-                            Spacer(modifier = Modifier.width(14.dp))
-                            Column {
-                                Text(
-                                    text = "Jiunge na Google",
-                                    color = Color.White,
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 0.3.sp
-                                )
-                                Text(
-                                    text = "Continue with Google",
-                                    color = Color.White.copy(alpha = 0.85f),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Normal
-                                )
-                            }
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Supabase Email & Password Sign In / Sign Up Button
-                Surface(
-                    onClick = { showAccountChooserDialog = true },
-                    shape = RoundedCornerShape(16.dp),
-                    color = Color(0xFF10B981).copy(alpha = 0.85f),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(8.dp, RoundedCornerShape(16.dp))
-                        .testTag("email_auth_button")
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Email,
-                            contentDescription = "Email Sign In",
-                            tint = Color.White,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Ingia kwa Barua Pepe (Email Login)",
-                            color = Color.White,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Guest / Skip Option
+                // Minimal Skip option
                 TextButton(
                     onClick = onSkipGuest,
                     modifier = Modifier.testTag("auth_guest_button")
                 ) {
                     Text(
-                        text = "Explore as Guest / Ruka kwa sasa",
-                        color = Color.White.copy(alpha = 0.9f),
-                        fontSize = 13.sp,
+                        text = "Skip",
+                        color = Color.White.copy(alpha = 0.85f),
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.Medium
                     )
                 }
             }
-        }
-
-        // 6. Supabase Email Authentication Modal Dialog
-        if (showAccountChooserDialog) {
-            AlertDialog(
-                onDismissRequest = {
-                    showAccountChooserDialog = false
-                    authErrorMessage = null
-                },
-                containerColor = CineSurface,
-                title = {
-                    Text(
-                        text = if (isSignUpMode) "Fungua Akaunti (Sign Up)" else "Ingia kwa Barua Pepe (Log In)",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp
-                    )
-                },
-                text = {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        if (isSignUpMode) {
-                            OutlinedTextField(
-                                value = nameInput,
-                                onValueChange = { nameInput = it },
-                                label = { Text("Jina Kamili (Display Name)", color = CineTextSecondary) },
-                                singleLine = true,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedTextColor = Color.White,
-                                    unfocusedTextColor = Color.White,
-                                    focusedBorderColor = CineGreen,
-                                    unfocusedBorderColor = CineCardBorder
-                                ),
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-
-                        OutlinedTextField(
-                            value = emailInput,
-                            onValueChange = {
-                                emailInput = it
-                                authErrorMessage = null
-                            },
-                            label = { Text("Barua Pepe (Email)", color = CineTextSecondary) },
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White,
-                                focusedBorderColor = CineGreen,
-                                unfocusedBorderColor = CineCardBorder
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-
-                        OutlinedTextField(
-                            value = passwordInput,
-                            onValueChange = {
-                                passwordInput = it
-                                authErrorMessage = null
-                            },
-                            label = { Text("Neno la Siri (Password)", color = CineTextSecondary) },
-                            singleLine = true,
-                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White,
-                                focusedBorderColor = CineGreen,
-                                unfocusedBorderColor = CineCardBorder
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-
-                        authErrorMessage?.let { err ->
-                            Text(
-                                text = err,
-                                color = Color(0xFFEF4444),
-                                fontSize = 12.sp,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-
-                        // Quick 1-Tap Google Account Chooser
-                        OutlinedButton(
-                            onClick = {
-                                showAccountChooserDialog = false
-                                try {
-                                    val authManager = com.example.data.firebase.AuthenticationManager(context)
-                                    val fallbackIntent = authManager.createAccountPickerIntent()
-                                    accountPickerLauncher.launch(fallbackIntent)
-                                } catch (e: Throwable) {
-                                    Toast.makeText(context, "Could not open Google account picker", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.5f)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Image(
-                                painter = painterResource(id = R.drawable.ic_google_logo),
-                                contentDescription = "Google",
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Chagua Akaunti ya Google ya Kifaa", color = Color.White, fontSize = 12.sp)
-                        }
-
-                        TextButton(
-                            onClick = {
-                                isSignUpMode = !isSignUpMode
-                                authErrorMessage = null
-                            },
-                            modifier = Modifier.align(Alignment.End)
-                        ) {
-                            Text(
-                                text = if (isSignUpMode) "Una akaunti tayari? Ingia hapa" else "Huna akaunti? Jisajili",
-                                color = CineGreen,
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            if (emailInput.isBlank() || passwordInput.isBlank()) {
-                                authErrorMessage = "Tafadhali weka barua pepe na neno la siri"
-                                return@Button
-                            }
-                            isAuthenticating = true
-                            if (isSignUpMode) {
-                                viewModel.signUpWithSupabase(
-                                    email = emailInput.trim(),
-                                    password = passwordInput,
-                                    displayName = nameInput.trim()
-                                ) { success, msg ->
-                                    isAuthenticating = false
-                                    if (success) {
-                                        showAccountChooserDialog = false
-                                        authSuccessAnimation = true
-                                        coroutineScope.launch {
-                                            delay(350)
-                                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                            onAuthSuccess()
-                                        }
-                                    } else {
-                                        authErrorMessage = msg
-                                    }
-                                }
-                            } else {
-                                viewModel.signInWithSupabase(
-                                    email = emailInput.trim(),
-                                    password = passwordInput
-                                ) { success, msg ->
-                                    isAuthenticating = false
-                                    if (success) {
-                                        showAccountChooserDialog = false
-                                        authSuccessAnimation = true
-                                        coroutineScope.launch {
-                                            delay(350)
-                                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                            onAuthSuccess()
-                                        }
-                                    } else {
-                                        authErrorMessage = msg
-                                    }
-                                }
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = CineGreen),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        if (isAuthenticating) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                color = Color.White,
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Text(
-                                text = if (isSignUpMode) "Jisajili" else "Ingia",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showAccountChooserDialog = false }) {
-                        Text("Funga", color = CineTextSecondary)
-                    }
-                }
-            )
         }
     }
 }

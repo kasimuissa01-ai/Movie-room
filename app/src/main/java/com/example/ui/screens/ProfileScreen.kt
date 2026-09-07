@@ -28,6 +28,8 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.WorkspacePremium
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -198,16 +200,17 @@ fun ProfileScreen(
                                 )
                                 Surface(
                                     shape = CircleShape,
-                                    color = if (isGoogleSignedIn) Color.White else CineGold,
+                                    color = if (isGoogleSignedIn) CineGreen else CineGold,
                                     modifier = Modifier
                                         .align(Alignment.BottomEnd)
                                         .size(22.dp)
                                 ) {
                                     if (isGoogleSignedIn) {
-                                        Image(
-                                            painter = painterResource(id = R.drawable.ic_google_logo),
-                                            contentDescription = "Google",
-                                            modifier = Modifier.padding(2.dp)
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Active User",
+                                            tint = Color.White,
+                                            modifier = Modifier.padding(3.dp)
                                         )
                                     } else {
                                         Icon(
@@ -231,23 +234,23 @@ fun ProfileScreen(
                                 )
                                 Spacer(modifier = Modifier.height(3.dp))
                                 Text(
-                                    text = if (isGoogleSignedIn) "Google Connected • $userEmail" else "Movie Room Ultra VIP • 4K HDR",
-                                    color = if (isGoogleSignedIn) Color(0xFF4285F4) else CineGold,
+                                    text = if (isGoogleSignedIn && userEmail.isNotBlank()) "Simu: $userEmail" else "Movie Room Ultra VIP • 4K HDR",
+                                    color = if (isGoogleSignedIn) CineGreen else CineGold,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    if (isGoogleSignedIn && isFirestoreSynced) {
+                                    if (isGoogleSignedIn) {
                                         Icon(
                                             imageVector = Icons.Default.CloudDone,
-                                            contentDescription = "Firestore Synced",
+                                            contentDescription = "Session Active",
                                             tint = Color(0xFF34A853),
                                             modifier = Modifier.size(12.dp)
                                         )
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Text(
-                                            text = "Firestore Cloud Active",
+                                            text = "Logged In • Session Saved",
                                             color = Color(0xFF34A853),
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Medium
@@ -265,7 +268,7 @@ fun ProfileScreen(
 
                         Spacer(modifier = Modifier.height(14.dp))
 
-                        // Google Sign-In / Account Action Banner
+                        // User Sign-In / Account Action Banner
                         if (isGoogleSignedIn) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -278,13 +281,14 @@ fun ProfileScreen(
                                     colors = ButtonDefaults.outlinedButtonColors(contentColor = CineTextPrimary),
                                     modifier = Modifier.weight(1f)
                                 ) {
-                                    Image(
-                                        painter = painterResource(id = R.drawable.ic_google_logo),
-                                        contentDescription = "Google",
+                                    Icon(
+                                        imageVector = Icons.Default.People,
+                                        contentDescription = "Switch",
+                                        tint = Color.White,
                                         modifier = Modifier.size(16.dp)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Switch Account", fontSize = 12.sp)
+                                    Text("Badili Mtumiaji", fontSize = 12.sp)
                                 }
 
                                 OutlinedButton(
@@ -294,34 +298,35 @@ fun ProfileScreen(
                                     colors = ButtonDefaults.outlinedButtonColors(contentColor = CineTextMuted),
                                     modifier = Modifier.weight(1f)
                                 ) {
-                                    Text("Sign Out", fontSize = 12.sp)
+                                    Text("Toka (Sign Out)", fontSize = 12.sp)
                                 }
                             }
                         } else {
                             Surface(
                                 onClick = onGoogleAuthClick,
                                 shape = RoundedCornerShape(12.dp),
-                                color = Color(0xFFA20916),
-                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.6f)),
+                                color = CineGreen,
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.5f)),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                        .padding(horizontal = 16.dp, vertical = 12.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.Center
                                 ) {
-                                    Image(
-                                        painter = painterResource(id = R.drawable.ic_google_logo),
-                                        contentDescription = "Google Logo",
+                                    Icon(
+                                        imageVector = Icons.Default.Person,
+                                        contentDescription = "Sign In",
+                                        tint = Color.White,
                                         modifier = Modifier.size(20.dp)
                                     )
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Text(
-                                        text = "Jiunge na Google (Sign In)",
+                                        text = "Ingia kwa Simu & Jina (Sign In)",
                                         color = Color.White,
-                                        fontSize = 13.sp,
+                                        fontSize = 14.sp,
                                         fontWeight = FontWeight.Bold
                                     )
                                 }
@@ -488,11 +493,11 @@ fun ProfileScreen(
                 )
             }
 
-            // Admin Portal & Firestore Database Management (ONLY visible when admin grapherkidd0@gmail.com is logged in)
+            // Admin Portal & Firestore Database Management (ONLY visible when admin is logged in)
             if (isAdminLoggedIn) {
                 item(key = "section_admin") {
                     Text(
-                        text = "Administrator Portal (grapherkidd0@gmail.com)",
+                        text = "Administrator Portal (0696102700)",
                         color = CineGold,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
@@ -569,7 +574,7 @@ fun ProfileScreen(
                             Spacer(modifier = Modifier.height(14.dp))
 
                             Text(
-                                text = "Catalog: $uploadedMoviesCount uploaded movie(s) stored in Cloudflare R2 bucket.",
+                                text = "Catalog: $uploadedMoviesCount uploaded movie(s) published.",
                                 fontSize = 12.sp,
                                 color = CineTextMuted
                             )
