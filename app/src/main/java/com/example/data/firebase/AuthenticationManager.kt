@@ -274,8 +274,13 @@ class AuthenticationManager(
             }
         }
 
-        val errMsg = lastApiException?.let { "Google Sign-In error (code ${it.statusCode})" }
-            ?: "Could not read account details. Please try again."
+        val lastCode = lastApiException?.statusCode
+        val errMsg = when (lastCode) {
+            10 -> "Google Sign-In error (code 10: Developer Error - Keystore SHA-1 / OAuth Client mismatch)"
+            12501 -> "Sign-in cancelled"
+            else -> lastApiException?.let { "Google Sign-In error (code ${it.statusCode})" }
+                ?: "Could not read account details. Please try again."
+        }
         return AuthResult.Error(errMsg, lastApiException)
     }
 }

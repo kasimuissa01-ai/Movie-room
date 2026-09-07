@@ -100,7 +100,7 @@ fun GoogleAuthScreen(
     var nameInput by remember { mutableStateOf("") }
     var authErrorMessage by remember { mutableStateOf<String?>(null) }
 
-    val googleSignInLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+    val accountPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val data = result.data
@@ -119,8 +119,53 @@ fun GoogleAuthScreen(
                             onAuthSuccess()
                         }
                     } else {
-                        if (msg != "Cancelled") {
+                        if (msg != "Cancelled" && msg != "Sign-in cancelled") {
                             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            )
+        } else {
+            isAuthenticating = false
+        }
+    }
+
+    val googleSignInLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val data = result.data
+        if (data != null) {
+            isAuthenticating = true
+            viewModel.handleGoogleSignInIntentResult(
+                context = context,
+                data = data,
+                onComplete = { success, msg ->
+                    if (success) {
+                        isAuthenticating = false
+                        authSuccessAnimation = true
+                        coroutineScope.launch {
+                            delay(350)
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            onAuthSuccess()
+                        }
+                    } else {
+                        // If Google Play Services returns code 10 (Developer Error: SHA-1/OAuth mismatch),
+                        // automatically fall back to the native Android account chooser
+                        if (msg.contains("code 10") || msg.contains("Code 10") || msg.contains("Developer Error")) {
+                            try {
+                                val authManager = com.example.data.firebase.AuthenticationManager(context)
+                                val fallbackIntent = authManager.createAccountPickerIntent()
+                                accountPickerLauncher.launch(fallbackIntent)
+                            } catch (e: Throwable) {
+                                isAuthenticating = false
+                                Toast.makeText(context, "Select your Google Account:", Toast.LENGTH_SHORT).show()
+                                showAccountChooserDialog = true
+                            }
+                        } else {
+                            isAuthenticating = false
+                            if (msg != "Cancelled" && msg != "Sign-in cancelled") {
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            }
                         }
                     }
                 }
@@ -460,6 +505,31 @@ fun GoogleAuthScreen(
                                 fontSize = 12.sp,
                                 modifier = Modifier.padding(top = 2.dp)
                             )
+                        }
+
+                        // Quick 1-Tap Google Account Chooser
+                        OutlinedButton(
+                            onClick = {
+                                showAccountChooserDialog = false
+                                try {
+                                    val authManager = com.example.data.firebase.AuthenticationManager(context)
+                                    val fallbackIntent = authManager.createAccountPickerIntent()
+                                    accountPickerLauncher.launch(fallbackIntent)
+                                } catch (e: Throwable) {
+                                    Toast.makeText(context, "Could not open Google account picker", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.5f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Image(
+                                painter = painterResource(id = R.drawable.ic_google_logo),
+                                contentDescription = "Google",
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Chagua Akaunti ya Google ya Kifaa", color = Color.White, fontSize = 12.sp)
                         }
 
                         TextButton(
