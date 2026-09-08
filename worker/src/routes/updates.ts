@@ -1,6 +1,88 @@
 import { Env } from '../types';
 import { createJsonResponse, createErrorResponse } from '../middleware/cache';
 
+async function findLatestJsonObject(bucket: R2Bucket): Promise<{ obj: R2ObjectBody; key: string } | null> {
+  const directKeys = [
+    'updates/latest.json',
+    '/updates/latest.json',
+    'latest.json',
+    '/latest.json',
+    'stories/updates/latest.json'
+  ];
+
+  for (const key of directKeys) {
+    try {
+      const obj = await bucket.get(key);
+      if (obj) return { obj, key };
+    } catch (_) {}
+  }
+
+  try {
+    const listUpdates = await bucket.list({ prefix: 'updates/' });
+    const matchUpdates = listUpdates.objects.find(o => o.key.endsWith('latest.json'));
+    if (matchUpdates) {
+      const obj = await bucket.get(matchUpdates.key);
+      if (obj) return { obj, key: matchUpdates.key };
+    }
+
+    const listRoot = await bucket.list();
+    const matchRoot = listRoot.objects.find(o => o.key.endsWith('latest.json'));
+    if (matchRoot) {
+      const obj = await bucket.get(matchRoot.key);
+      if (obj) return { obj, key: matchRoot.key };
+    }
+  } catch (_) {}
+
+  return null;
+}
+
+async function findApkObject(bucket: R2Bucket, requestedKey?: string): Promise<{ obj: R2ObjectBody; key: string } | null> {
+  const candidateKeys: string[] = [];
+  if (requestedKey) {
+    candidateKeys.push(
+      requestedKey,
+      requestedKey.startsWith('/') ? requestedKey.slice(1) : `/${requestedKey}`,
+      requestedKey.replace(/^updates\//, ''),
+      `updates/${requestedKey.replace(/^updates\//, '')}`,
+      `stories/${requestedKey}`
+    );
+  }
+  candidateKeys.push(
+    'updates/cinevault-latest.apk',
+    '/updates/cinevault-latest.apk',
+    'cinevault-latest.apk',
+    '/cinevault-latest.apk',
+    'stories/updates/cinevault-latest.apk'
+  );
+
+  for (const key of candidateKeys) {
+    try {
+      const obj = await bucket.get(key);
+      if (obj) return { obj, key };
+    } catch (_) {}
+  }
+
+  try {
+    const listUpdates = await bucket.list({ prefix: 'updates/' });
+    const apkUpdates = listUpdates.objects.filter(o => o.key.endsWith('.apk'));
+    const preferred = apkUpdates.find(o => o.key.includes('latest')) || apkUpdates[0];
+    if (preferred) {
+      const obj = await bucket.get(preferred.key);
+      if (obj) return { obj, key: preferred.key };
+    }
+
+    const listRoot = await bucket.list();
+    const apkRoot = listRoot.objects.filter(o => o.key.endsWith('.apk'));
+    const preferredRoot = apkRoot.find(o => o.key.includes('latest')) || apkRoot[0];
+    if (preferredRoot) {
+      const obj = await bucket.get(preferredRoot.key);
+      if (obj) return { obj, key: preferredRoot.key };
+    }
+  } catch (_) {}
+
+  return null;
+}
+
 export async function handleGetLatestUpdate(request: Request, env: Env): Promise<Response> {
   try {
     const bucket = env.MOVIE_BUCKET;
@@ -8,15 +90,12 @@ export async function handleGetLatestUpdate(request: Request, env: Env): Promise
       return createErrorResponse('Storage bucket (MOVIE_BUCKET) not configured on worker', 500);
     }
 
-    let obj = await bucket.get('updates/latest.json');
-    if (!obj) {
-      obj = await bucket.get('latest.json');
-    }
-
-    if (!obj) {
+    const result = await findLatestJsonObject(bucket);
+    if (!result) {
       return createErrorResponse('No update metadata (updates/latest.json) found in storage bucket.', 404);
     }
 
+    const { obj } = result;
     const text = await obj.text();
     const data = JSON.parse(text);
 
@@ -45,42 +124,25 @@ export async function handleDownloadUpdateApk(request: Request, env: Env): Promi
       return createErrorResponse('Storage bucket (MOVIE_BUCKET) not configured on worker', 500);
     }
 
-    let apkKey = 'updates/cinevault-latest.apk';
-    let latestObj = await bucket.get('updates/latest.json');
-    if (!latestObj) {
-      latestObj = await bucket.get('latest.json');
-    }
-
-    if (latestObj) {
+    let apkKeyCandidate = 'updates/cinevault-latest.apk';
+    const latestResult = await findLatestJsonObject(bucket);
+    if (latestResult) {
       try {
-        const text = await latestObj.text();
+        const text = await latestResult.obj.text();
         const data = JSON.parse(text);
         if (data.apkKey && typeof data.apkKey === 'string') {
-          apkKey = data.apkKey;
+          apkKeyCandidate = data.apkKey;
         }
       } catch (ignored) {}
     }
 
-    let obj = await bucket.get(apkKey);
-    if (!obj && apkKey !== 'updates/cinevault-latest.apk') {
-      obj = await bucket.get('updates/cinevault-latest.apk');
-    }
-
-    if (!obj) {
-      // Fallback: search for any .apk in updates/ prefix
-      const listed = await bucket.list({ prefix: 'updates/' });
-      const apkObj = listed.objects.find(o => o.key.endsWith('.apk'));
-      if (apkObj) {
-        obj = await bucket.get(apkObj.key);
-        apkKey = apkObj.key;
-      }
-    }
-
-    if (!obj) {
+    const apkResult = await findApkObject(bucket, apkKeyCandidate);
+    if (!apkResult) {
       return createErrorResponse('APK update file not found in storage bucket.', 404);
     }
 
-    const filename = apkKey.split('/').pop() || 'cinevault-update.apk';
+    const { obj, key } = apkResult;
+    const filename = key.split('/').pop() || 'cinevault-update.apk';
     const headers = new Headers();
     headers.set('Content-Type', 'application/vnd.android.package-archive');
     headers.set('Content-Disposition', `attachment; filename="${filename}"`);
