@@ -121,7 +121,11 @@ jobs:
           if [ -z "$VERSION_NAME" ]; then VERSION_NAME="1.0.0"; fi
           if [ -z "$VERSION_CODE" ]; then VERSION_CODE="1"; fi
 
-          echo "Detected versionName: $VERSION_NAME, versionCode: $VERSION_CODE"
+          # Compute actual formatted APK size
+          APK_BYTES=$(wc -c < "$APK_FILE" | tr -d ' ')
+          FILE_SIZE_FORMATTED=$(awk -v b="$APK_BYTES" 'BEGIN { printf "%.1f MB", b / (1024*1024) }')
+
+          echo "Detected versionName: $VERSION_NAME, versionCode: $VERSION_CODE, size: $FILE_SIZE_FORMATTED ($APK_BYTES bytes)"
 
           TARGET_APK_NAME="cinevault-$VERSION_NAME.apk"
           cp "$APK_FILE" "release_assets/$TARGET_APK_NAME"
@@ -136,15 +140,16 @@ jobs:
             "apkKey": "updates/$TARGET_APK_NAME",
             "releaseNotes": "CineVault automated release v$VERSION_NAME (Build ${{ github.run_number }})",
             "forceUpdate": false,
-            "fileSizeFormatted": "45 MB"
+            "fileSizeFormatted": "$FILE_SIZE_FORMATTED"
           }
           EOF
 
           # Upload to Cloudflare R2 if CLOUDFLARE_API_TOKEN is provided
           if [ -n "$CLOUDFLARE_API_TOKEN" ]; then
             echo "Uploading APK and latest.json to Cloudflare R2 bucket 'stories'..."
-            npx wrangler r2 object put stories/updates/$TARGET_APK_NAME --file="release_assets/$TARGET_APK_NAME" || echo "R2 upload warning: APK upload failed"
-            npx wrangler r2 object put stories/updates/latest.json --file="release_assets/latest.json" || echo "R2 upload warning: latest.json upload failed"
+            npx wrangler r2 object put stories/updates/$TARGET_APK_NAME --file="release_assets/$TARGET_APK_NAME"
+            npx wrangler r2 object put stories/updates/cinevault-latest.apk --file="release_assets/cinevault-latest.apk"
+            npx wrangler r2 object put stories/updates/latest.json --file="release_assets/latest.json"
           else
             echo "CLOUDFLARE_API_TOKEN not set; skipping direct R2 upload in CI (artifact available)."
           fi
