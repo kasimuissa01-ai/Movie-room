@@ -66,7 +66,10 @@ fun CineApp(
     val selectedGenreFilter by viewModel.selectedGenreFilter.collectAsState()
     val searchResults by viewModel.searchResults.collectAsState()
     val recentSearches by viewModel.recentSearches.collectAsState()
-    val isSearchingTmdb by viewModel.isSearchingTmdb.collectAsState()
+    val isSearching by viewModel.isSearching.collectAsState()
+    val searchErrorMessage by viewModel.searchErrorMessage.collectAsState()
+    val homeFeedState by viewModel.homeFeedState.collectAsState()
+    val movieDetailsMap by viewModel.movieDetailsMap.collectAsState()
 
     val isAdminLoggedIn by viewModel.isAdminLoggedIn.collectAsState()
     val uploadedMovies by viewModel.uploadedMovies.collectAsState()
@@ -195,8 +198,8 @@ fun CineApp(
                     when (currentTab) {
                         CineNavTab.HOME -> {
                             HomeScreen(
-                                featuredMovies = viewModel.featuredMovies,
-                                categories = viewModel.categories,
+                                homeFeedState = homeFeedState,
+                                onRefresh = { viewModel.loadHomeFeeds() },
                                 onMovieClick = { movie ->
                                     navController.navigate("details/${movie.id}")
                                 },
@@ -279,7 +282,7 @@ fun CineApp(
                                     viewModel.resetOnboarding()
                                     navController.navigate("onboarding")
                                 },
-                                isTmdbLive = viewModel.isTmdbLiveConfigured,
+                                isTmdbLive = true,
                                 isAdminLoggedIn = isAdminLoggedIn,
                                 uploadedMoviesCount = uploadedMovies.size,
                                 onAdminLoginClick = {
@@ -411,8 +414,9 @@ fun CineApp(
                 onMovieClick = { movie ->
                     navController.navigate("details/${movie.id}")
                 },
-                isSearchingTmdb = isSearchingTmdb,
-                isTmdbLive = viewModel.isTmdbLiveConfigured
+                isSearching = isSearching,
+                searchErrorMessage = searchErrorMessage,
+                onRetrySearch = { viewModel.updateSearchQuery(searchQuery) }
             )
         }
 
@@ -434,43 +438,53 @@ fun CineApp(
             }
         ) { backStackEntry ->
             val movieId = backStackEntry.arguments?.getString("movieId") ?: ""
-            val dynamicMovies by viewModel.dynamicMovies.collectAsState()
-            val movie = dynamicMovies[movieId] ?: viewModel.getMovieById(movieId)
-            if (movie != null) {
-                val isInWatchlist = viewModel.isMovieInWatchlist(movie.id)
-                val downloadedEntity = downloadedMovies.firstOrNull { it.movieId == movie.id && it.downloadStatus == "COMPLETED" }
-                val isDownloaded = downloadedEntity != null
-                val isRoomCached = cachedMovies.any { it.id == movie.id } || isInWatchlist
-                val downloadProgress = downloadProgressMap[movie.id]
-
-                MovieDetailsScreen(
-                    movie = movie,
-                    isInWatchlist = isInWatchlist,
-                    isDownloaded = isDownloaded,
-                    downloadProgress = downloadProgress,
-                    isOnline = isOnline,
-                    isRoomCached = isRoomCached,
-                    onToggleWatchlist = { viewModel.toggleWatchlist(movie) },
-                    onDownloadClick = { movieToDownload ->
-                        viewModel.startMovieDownload(movieToDownload, context)
-                    },
-                    onDeleteDownloadClick = { movieIdToDelete ->
-                        viewModel.deleteDownloadedMovie(movieIdToDelete, context)
-                    },
-                    onWatchClick = {
-                        navController.navigate("player/${movie.id}/false")
-                    },
-                    onTrailerClick = {
-                        navController.navigate("player/${movie.id}/true")
-                    },
-                    onRelatedMovieClick = { rec ->
-                        navController.navigate("details/${rec.id}")
-                    },
-                    onBackClick = { navController.popBackStack() }
-                )
-            } else {
-                viewModel.fetchTmdbMovieById(movieId)
+            
+            LaunchedEffect(movieId) {
+                if (movieId.isNotBlank()) {
+                    viewModel.loadMovieDetails(movieId)
+                }
             }
+
+            val detailState = movieDetailsMap[movieId]
+            val movie = detailState?.movie ?: viewModel.getMovieById(movieId)
+            
+            val isInWatchlist = movie?.let { viewModel.isMovieInWatchlist(it.id) } ?: false
+            val downloadedEntity = downloadedMovies.firstOrNull { it.movieId == movieId && it.downloadStatus == "COMPLETED" }
+            val isDownloaded = downloadedEntity != null
+            val isRoomCached = (cachedMovies.any { it.id == movieId } || isInWatchlist)
+            val downloadProgress = downloadProgressMap[movieId]
+
+            MovieDetailsScreen(
+                movie = movie,
+                isInWatchlist = isInWatchlist,
+                isDownloaded = isDownloaded,
+                downloadProgress = downloadProgress,
+                isOnline = isOnline,
+                isRoomCached = isRoomCached,
+                isLoading = detailState?.isLoading ?: (movie == null),
+                isError = detailState?.isError ?: false,
+                errorMessage = detailState?.errorMessage ?: "",
+                recommendations = detailState?.recommendations ?: emptyList(),
+                isLoadingRecommendations = detailState?.isLoadingRecommendations ?: false,
+                onRetry = { viewModel.loadMovieDetails(movieId) },
+                onToggleWatchlist = { movie?.let { viewModel.toggleWatchlist(it) } },
+                onDownloadClick = { movieToDownload ->
+                    viewModel.startMovieDownload(movieToDownload, context)
+                },
+                onDeleteDownloadClick = { movieIdToDelete ->
+                    viewModel.deleteDownloadedMovie(movieIdToDelete, context)
+                },
+                onWatchClick = { m ->
+                    navController.navigate("player/${m.id}/false")
+                },
+                onTrailerClick = { m ->
+                    navController.navigate("player/${m.id}/true")
+                },
+                onRelatedMovieClick = { rec ->
+                    navController.navigate("details/${rec.id}")
+                },
+                onBackClick = { navController.popBackStack() }
+            )
         }
 
         // Video Player Screen
@@ -535,7 +549,15 @@ fun CineApp(
                 backStackEntry.arguments?.getString("categoryTitle") ?: "",
                 StandardCharsets.UTF_8.toString()
             )
-            val movies = SampleMovies.getMoviesForCategory(categoryKey)
+            val movies = when (categoryKey) {
+                "trending" -> homeFeedState.trending
+                "popular" -> homeFeedState.popular
+                "action" -> homeFeedState.action
+                "now_playing" -> homeFeedState.nowPlaying
+                "upcoming" -> homeFeedState.upcoming
+                "uploaded" -> uploadedMovies
+                else -> SampleMovies.getMoviesForCategory(categoryKey)
+            }
             CategoryDetailScreen(
                 categoryTitle = categoryTitle,
                 movies = movies,

@@ -79,31 +79,85 @@ object AppUpdateManager {
     }
 
     /**
-     * Checks for updates by querying Firestore first, and falling back to GitHub Releases API directly.
-     * This means as soon as you push a GitHub Release with an APK, any user opening the app will automatically get the update prompt!
+     * Checks for updates by querying Cloudflare Worker (/api/updates/latest),
+     * falling back to Firestore and GitHub Releases if needed.
      */
     suspend fun checkForUpdates(context: Context): AppUpdateInfo = withContext(Dispatchers.IO) {
         val currentCode = getCurrentVersionCode(context)
         val currentName = getCurrentVersionName(context)
 
-        // 1. Try Firestore First
+        // 1. Try Cloudflare Worker Backend (/api/updates/latest)
+        val workerInfo = checkWorkerUpdate(context, currentCode, currentName)
+        if (workerInfo != null && workerInfo.isUpdateAvailable) {
+            return@withContext workerInfo
+        }
+
+        // 2. Try Firestore
         val firestoreInfo = checkFirestoreUpdate(context, currentCode, currentName)
         if (firestoreInfo != null && firestoreInfo.isUpdateAvailable) {
             return@withContext firestoreInfo
         }
 
-        // 2. Automatically query GitHub Releases API directly
+        // 3. Automatically query GitHub Releases API directly
         val githubInfo = checkGitHubLatestRelease(context, currentCode, currentName)
         if (githubInfo != null && githubInfo.isUpdateAvailable) {
             return@withContext githubInfo
         }
 
-        // 3. Return latest known info or current status
-        return@withContext firestoreInfo ?: (githubInfo ?: AppUpdateInfo(
+        // 4. Return latest known info or current status
+        return@withContext workerInfo ?: (firestoreInfo ?: (githubInfo ?: AppUpdateInfo(
             latestVersionCode = currentCode,
             latestVersionName = currentName,
             isUpdateAvailable = false
-        ))
+        )))
+    }
+
+    private fun checkWorkerUpdate(context: Context, currentCode: Long, currentName: String): AppUpdateInfo? {
+        return try {
+            val baseUrl = com.example.data.api.BackendConfig.getBaseUrl(context)
+            val apiUrl = "$baseUrl/api/updates/latest"
+            val connection = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 8000
+                readTimeout = 8000
+                requestMethod = "GET"
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("User-Agent", "CineVault-Android")
+            }
+
+            if (connection.responseCode == HttpURLConnection.HTTP_OK) {
+                val reader = BufferedReader(InputStreamReader(connection.inputStream))
+                val responseStr = reader.use { it.readText() }
+                connection.disconnect()
+
+                val json = JSONObject(responseStr)
+                if (json.optBoolean("success", false)) {
+                    val latestCode = json.optLong("versionCode", currentCode)
+                    val latestName = json.optString("versionName", currentName)
+                    val downloadUrl = json.optString("downloadUrl", "$baseUrl/api/updates/download")
+                    val notes = json.optString("releaseNotes", "New version of CineVault available.")
+                    val fileSize = json.optString("fileSizeFormatted", "45 MB")
+                    val force = json.optBoolean("forceUpdate", false)
+
+                    val isAvailable = latestCode > currentCode
+
+                    return AppUpdateInfo(
+                        latestVersionCode = latestCode,
+                        latestVersionName = latestName,
+                        minSupportedVersionCode = if (force) latestCode else 1L,
+                        apkDownloadUrl = downloadUrl,
+                        releaseNotes = notes,
+                        releaseDate = "Latest",
+                        fileSizeFormatted = fileSize,
+                        isForceUpdate = force,
+                        isUpdateAvailable = isAvailable
+                    )
+                }
+            }
+            null
+        } catch (e: Exception) {
+            Log.w(TAG, "Worker update check error: ${e.message}")
+            null
+        }
     }
 
     private suspend fun checkFirestoreUpdate(context: Context, currentCode: Long, currentName: String): AppUpdateInfo? {

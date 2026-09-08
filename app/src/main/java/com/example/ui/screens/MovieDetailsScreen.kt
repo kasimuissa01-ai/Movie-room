@@ -80,7 +80,7 @@ import com.example.ui.theme.CineTextSecondary
 
 @Composable
 fun MovieDetailsScreen(
-    movie: Movie,
+    movie: Movie?,
     isInWatchlist: Boolean,
     onToggleWatchlist: () -> Unit,
     onWatchClick: (Movie) -> Unit,
@@ -88,6 +88,12 @@ fun MovieDetailsScreen(
     onRelatedMovieClick: (Movie) -> Unit,
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
+    isLoading: Boolean = false,
+    isError: Boolean = false,
+    errorMessage: String = "",
+    onRetry: () -> Unit = {},
+    recommendations: List<Movie> = emptyList(),
+    isLoadingRecommendations: Boolean = false,
     isDownloaded: Boolean = false,
     downloadProgress: Int? = null,
     onDownloadClick: (Movie) -> Unit = {},
@@ -95,17 +101,79 @@ fun MovieDetailsScreen(
     isOnline: Boolean = true,
     isRoomCached: Boolean = false
 ) {
-    val recommended = SampleMovies.getRecommended(movie.id)
-
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(CineBlack)
             .testTag("movie_details_screen")
     ) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize()
-        ) {
+        if (isLoading && movie == null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                CircularProgressIndicator(
+                    color = CineRedPrimary,
+                    strokeWidth = 3.dp,
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(modifier = Modifier.height(20.dp))
+                Text(
+                    text = "Loading Movie Details...",
+                    color = CineTextPrimary,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        } else if (isError && movie == null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(CircleShape)
+                        .background(CineRedPrimary.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CloudOff,
+                        contentDescription = "Error",
+                        tint = CineRedPrimary,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(18.dp))
+                Text(
+                    text = "Failed to load movie",
+                    color = CineTextPrimary,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = errorMessage.ifEmpty { "Unable to connect to the movie API server." },
+                    color = CineTextSecondary,
+                    fontSize = 13.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                PrimaryButton(
+                    text = "Retry",
+                    onClick = onRetry
+                )
+            }
+        } else if (movie != null) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize()
+            ) {
             // Large Backdrop Header with 16:9 Cinematic Framing and floating Poster
             item(key = "header_backdrop") {
                 Box(
@@ -662,33 +730,56 @@ fun MovieDetailsScreen(
                 }
             }
 
-            // "More Like This" Recommendations
-            item(key = "recommended_header") {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 12.dp)
-                ) {
-                    Text(
-                        text = "More Like This",
-                        color = CineTextPrimary,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            item(key = "recommended_row") {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 20.dp),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    items(recommended, key = { it.id }) { recMovie ->
-                        MovieCard(
-                            movie = recMovie,
-                            onClick = { onRelatedMovieClick(recMovie) }
+            // "More Like This" Recommendations from /api/movies/movie/:id/recommendations
+            if (isLoadingRecommendations) {
+                item(key = "rec_loading") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            color = CineRedPrimary,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(18.dp)
                         )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Finding recommendations...",
+                            color = CineTextMuted,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            } else if (recommendations.isNotEmpty()) {
+                item(key = "recommended_header") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 12.dp)
+                    ) {
+                        Text(
+                            text = "More Like This",
+                            color = CineTextPrimary,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                item(key = "recommended_row") {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        items(recommendations, key = { it.id }) { recMovie ->
+                            MovieCard(
+                                movie = recMovie,
+                                onClick = { onRelatedMovieClick(recMovie) }
+                            )
+                        }
                     }
                 }
             }
@@ -697,6 +788,7 @@ fun MovieDetailsScreen(
             item(key = "bottom_space") {
                 Spacer(modifier = Modifier.height(40.dp))
             }
+        }
         }
 
         // Floating Back Button with statusBarsPadding

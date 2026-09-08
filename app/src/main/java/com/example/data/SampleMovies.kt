@@ -286,7 +286,13 @@ object SampleMovies {
     )
 
     fun getMovieById(id: String): Movie? {
-        return allMovies.firstOrNull { it.id == id }
+        val clean = id.trim()
+        val numeric = clean.removePrefix("tmdb_")
+        return allMovies.firstOrNull { it.id == clean || it.id == numeric || "tmdb_${it.id}" == clean }
+    }
+
+    fun getRelatedMovies(movie: Movie, limit: Int = 6): List<Movie> {
+        return getSimilarMovies(movie, limit)
     }
 
     fun getRecommended(movieId: String, limit: Int = 6): List<Movie> {

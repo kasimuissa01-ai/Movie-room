@@ -12,8 +12,14 @@ import coil.memory.MemoryCache
  */
 class CineApplication : Application(), ImageLoaderFactory {
 
+    companion object {
+        var instance: CineApplication? = null
+            private set
+    }
+
     override fun onCreate() {
         super.onCreate()
+        instance = this
         // Ensure private download directory with .nomedia is initialized early in background
         com.example.data.MovieDownloadManager.ensurePrivateStorage(this)
     }

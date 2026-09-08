@@ -28,13 +28,11 @@ object SupabaseClient {
         .build()
 
     fun getSupabaseUrl(): String {
-        val buildUrl = try { BuildConfig.SUPABASE_URL } catch (e: Throwable) { "" }
-        return if (buildUrl.isNotBlank() && !buildUrl.startsWith("YOUR_")) buildUrl else DEFAULT_URL
+        return DEFAULT_URL
     }
 
     fun getSupabaseAnonKey(): String {
-        val buildKey = try { BuildConfig.SUPABASE_ANON_KEY } catch (e: Throwable) { "" }
-        return if (buildKey.isNotBlank() && !buildKey.startsWith("YOUR_")) buildKey else ""
+        return ""
     }
 
     suspend fun signInWithEmail(email: String, password: String): SupabaseAuthResult = withContext(Dispatchers.IO) {

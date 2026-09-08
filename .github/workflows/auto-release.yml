@@ -39,6 +39,13 @@ jobs:
           gradle-version: '9.3.1'
 
       - name: Prepare Keystore and Environment
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_PUBLIC_URL_BASE: ${{ secrets.R2_PUBLIC_URL_BASE }}
         run: |
           # 1. Restore or generate signing keystore
           if [ -f "debug.keystore.base64" ]; then
@@ -48,41 +55,107 @@ jobs:
             keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
 
-          # 2. Setup .env file
+          # 2. Setup .env file with actual production secrets
           if [ -f ".env.example" ]; then
             cp .env.example .env
           else
             touch .env
           fi
 
+          # Replace or append production secrets if provided in GitHub Secrets
+          if [ -n "$TMDB_API_KEY" ]; then
+            sed -i "s|^TMDB_API_KEY=.*|TMDB_API_KEY=$TMDB_API_KEY|g" .env || echo "TMDB_API_KEY=$TMDB_API_KEY" >> .env
+          fi
+          if [ -n "$R2_ACCOUNT_ID" ]; then
+            sed -i "s|^R2_ACCOUNT_ID=.*|R2_ACCOUNT_ID=$R2_ACCOUNT_ID|g" .env || echo "R2_ACCOUNT_ID=$R2_ACCOUNT_ID" >> .env
+          fi
+          if [ -n "$R2_ACCESS_KEY_ID" ]; then
+            sed -i "s|^R2_ACCESS_KEY_ID=.*|R2_ACCESS_KEY_ID=$R2_ACCESS_KEY_ID|g" .env || echo "R2_ACCESS_KEY_ID=$R2_ACCESS_KEY_ID" >> .env
+          fi
+          if [ -n "$R2_SECRET_ACCESS_KEY" ]; then
+            sed -i "s|^R2_SECRET_ACCESS_KEY=.*|R2_SECRET_ACCESS_KEY=$R2_SECRET_ACCESS_KEY|g" .env || echo "R2_SECRET_ACCESS_KEY=$R2_SECRET_ACCESS_KEY" >> .env
+          fi
+          if [ -n "$R2_BUCKET_NAME" ]; then
+            sed -i "s|^R2_BUCKET_NAME=.*|R2_BUCKET_NAME=$R2_BUCKET_NAME|g" .env || echo "R2_BUCKET_NAME=$R2_BUCKET_NAME" >> .env
+          fi
+          if [ -n "$R2_PUBLIC_URL_BASE" ]; then
+            sed -i "s|^R2_PUBLIC_URL_BASE=.*|R2_PUBLIC_URL_BASE=$R2_PUBLIC_URL_BASE|g" .env || echo "R2_PUBLIC_URL_BASE=$R2_PUBLIC_URL_BASE" >> .env
+          fi
+
           # 3. Ensure gradlew executable
           chmod +x gradlew || true
 
-      - name: Build APK with Gradle
+      - name: Build Release APK with Gradle
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m"
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          gradle :app:assembleDebug --no-daemon --no-configuration-cache --stacktrace
+          gradle :app:assembleRelease --no-daemon --no-configuration-cache --stacktrace
 
-      - name: Prepare APK Asset
+      - name: Prepare and Upload to Cloudflare R2
         id: prep
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           mkdir -p release_assets
-          # Find and copy the generated apk
-          APK_FILE=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
-          if [ -n "$APK_FILE" ]; then
-            cp "$APK_FILE" release_assets/MovieRoom-v1.1.0-build${{ github.run_number }}.apk
-            cp "$APK_FILE" release_assets/MovieRoom-latest.apk
-            echo "apk_path=release_assets/MovieRoom-latest.apk" >> $GITHUB_OUTPUT
-            echo "apk_named=release_assets/MovieRoom-v1.1.0-build${{ github.run_number }}.apk" >> $GITHUB_OUTPUT
-          else
-            echo "Error: No APK found!"
+          APK_FILE=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          if [ -z "$APK_FILE" ]; then
+            APK_FILE=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
+          fi
+          
+          if [ -z "$APK_FILE" ]; then
+            echo "Error: Release APK not found!"
             exit 1
           fi
 
-          # Generate dynamic version tag
-          TAG_NAME="v1.1.${{ github.run_number }}"
+          # Extract versionName and versionCode from app/build.gradle.kts
+          VERSION_NAME=$(grep -E 'versionName\s*=\s*".*"' app/build.gradle.kts | head -n 1 | sed 's/.*versionName\s*=\s*"\(.*\)"/\1/')
+          VERSION_CODE=$(grep -E 'versionCode\s*=\s*[0-9]+' app/build.gradle.kts | head -n 1 | sed 's/.*versionCode\s*=\s*\([0-9]*\)/\1/')
+          
+          if [ -z "$VERSION_NAME" ]; then VERSION_NAME="1.0.0"; fi
+          if [ -z "$VERSION_CODE" ]; then VERSION_CODE="1"; fi
+
+          echo "Detected versionName: $VERSION_NAME, versionCode: $VERSION_CODE"
+
+          TARGET_APK_NAME="cinevault-$VERSION_NAME.apk"
+          cp "$APK_FILE" "release_assets/$TARGET_APK_NAME"
+          cp "$APK_FILE" "release_assets/cinevault-latest.apk"
+
+          # Generate latest.json
+          cat <<EOF > release_assets/latest.json
+          {
+            "success": true,
+            "versionCode": $VERSION_CODE,
+            "versionName": "$VERSION_NAME",
+            "apkKey": "updates/$TARGET_APK_NAME",
+            "releaseNotes": "CineVault automated release v$VERSION_NAME (Build ${{ github.run_number }})",
+            "forceUpdate": false,
+            "fileSizeFormatted": "45 MB"
+          }
+          EOF
+
+          # Upload to Cloudflare R2 if CLOUDFLARE_API_TOKEN is provided
+          if [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "Uploading APK and latest.json to Cloudflare R2 bucket 'stories'..."
+            npx wrangler r2 object put stories/updates/$TARGET_APK_NAME --file="release_assets/$TARGET_APK_NAME" || echo "R2 upload warning: APK upload failed"
+            npx wrangler r2 object put stories/updates/latest.json --file="release_assets/latest.json" || echo "R2 upload warning: latest.json upload failed"
+          else
+            echo "CLOUDFLARE_API_TOKEN not set; skipping direct R2 upload in CI (artifact available)."
+          fi
+
+          TAG_NAME="v$VERSION_NAME-b${{ github.run_number }}"
           echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "apk_named=release_assets/$TARGET_APK_NAME" >> $GITHUB_OUTPUT
+          echo "apk_path=release_assets/cinevault-latest.apk" >> $GITHUB_OUTPUT
+
+      - name: Upload APK as Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MovieRoom-APK-Build-${{ github.run_number }}
+          path: release_assets/*.apk
+          retention-days: 14
 
       - name: Create GitHub Release and Upload APK
         uses: softprops/action-gh-release@v2

@@ -2,13 +2,14 @@ package com.example.ui
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import android.net.Uri
 import com.example.data.MovieDatabase
 import com.example.data.MovieRepository
 import com.example.data.SampleMovies
+import com.example.data.api.MovieApiClient
 import com.example.data.entity.UploadedMovieEntity
 import com.example.data.entity.WatchHistoryEntity
 import com.example.data.firebase.FirebaseAuthManager
@@ -23,6 +24,7 @@ import com.example.data.updater.UpdateDownloadProgress
 import com.example.model.Movie
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -33,6 +35,26 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
+
+data class HomeFeedState(
+    val isLoading: Boolean = true,
+    val isError: Boolean = false,
+    val errorMessage: String = "",
+    val trending: List<Movie> = emptyList(),
+    val popular: List<Movie> = emptyList(),
+    val action: List<Movie> = emptyList(),
+    val nowPlaying: List<Movie> = emptyList(),
+    val upcoming: List<Movie> = emptyList()
+)
+
+data class MovieDetailsState(
+    val isLoading: Boolean = false,
+    val isError: Boolean = false,
+    val errorMessage: String = "",
+    val movie: Movie? = null,
+    val recommendations: List<Movie> = emptyList(),
+    val isLoadingRecommendations: Boolean = false
+)
 
 class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -59,7 +81,6 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
     val isTmdbLiveConfigured: Boolean = TmdbClient.isApiKeyConfigured
     val isR2Configured: Boolean get() = R2Config.isR2Configured
-    val r2BucketName: String get() = R2Config.bucketName
     val r2PublicUrlBase: String get() = R2Config.publicUrlBase
 
     // Admin Session State - strictly authorized for grapherkidd0@gmail.com and phone 0696102700
@@ -127,7 +148,15 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     val categories = SampleMovies.categories
     val popularGenres = SampleMovies.popularGenres
 
-    // Dynamically loaded movies from TMDB API
+    // Home Feed Live State from Cloudflare Worker API
+    private val _homeFeedState = MutableStateFlow(HomeFeedState(isLoading = true))
+    val homeFeedState: StateFlow<HomeFeedState> = _homeFeedState.asStateFlow()
+
+    // Movie Details Cache & Live State Map (keyed by Movie ID)
+    private val _movieDetailsMap = MutableStateFlow<Map<String, MovieDetailsState>>(emptyMap())
+    val movieDetailsMap: StateFlow<Map<String, MovieDetailsState>> = _movieDetailsMap.asStateFlow()
+
+    // Dynamically loaded movies from Worker API
     private val _dynamicMovies = MutableStateFlow<Map<String, Movie>>(emptyMap())
     val dynamicMovies: StateFlow<Map<String, Movie>> = _dynamicMovies.asStateFlow()
 
@@ -141,6 +170,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     val watchlistMovies: StateFlow<List<Movie>> = repository.getWatchlistMovies { id ->
         uploadedMovies.value.firstOrNull { it.id == id }
             ?: _dynamicMovies.value[id]
+            ?: _movieDetailsMap.value[id]?.movie
             ?: SampleMovies.getMovieById(id)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -163,15 +193,18 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     val selectedGenreFilter: StateFlow<String?> = _selectedGenreFilter.asStateFlow()
 
     private val _recentSearches = MutableStateFlow(
-        listOf("Inception (ID: 27205)", "27205", "The Last Hunt", "Chrono Drift", "Christopher Nolan")
+        listOf("Dune: Part Two", "Oppenheimer", "Spider-Man", "Action", "Inception")
     )
     val recentSearches: StateFlow<List<String>> = _recentSearches.asStateFlow()
 
-    private val _tmdbSearchResults = MutableStateFlow<List<Movie>>(emptyList())
-    private val _isSearchingTmdb = MutableStateFlow(false)
-    val isSearchingTmdb: StateFlow<Boolean> = _isSearchingTmdb.asStateFlow()
+    private val _apiSearchResults = MutableStateFlow<List<Movie>>(emptyList())
+    private val _isSearching = MutableStateFlow(false)
+    val isSearching: StateFlow<Boolean> = _isSearching.asStateFlow()
+    val isSearchingTmdb: StateFlow<Boolean> = _isSearching.asStateFlow()
+    private val _searchErrorMessage = MutableStateFlow<String?>(null)
+    val searchErrorMessage: StateFlow<String?> = _searchErrorMessage.asStateFlow()
 
-    private var tmdbSearchJob: Job? = null
+    private var searchJob: Job? = null
 
     // App OTA Auto-Updater Live State
     private val _appUpdateInfo = MutableStateFlow<AppUpdateInfo?>(null)
@@ -201,7 +234,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         com.example.data.MovieDownloadManager.downloadProgressMap
 
     init {
-        // Run background warmups entirely on IO dispatcher so UI launches instantly with zero delay
+        // Run background warmups and initial fetch on IO dispatcher
         viewModelScope.launch(Dispatchers.IO) {
             // Load registered Firestore users in background
             loadFirestoreUsers(application)
@@ -216,44 +249,220 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                 Log.w(TAG, "Sample movies room cache init: ${e.message}")
             }
 
-            // If TMDB API key is configured, preload movie 27205 ("Inception") from TMDB
-            if (isTmdbLiveConfigured) {
-                fetchTmdbMovieById("27205")
+            // Fetch live feeds from Cloudflare Worker Backend
+            loadHomeFeeds()
+        }
+    }
+
+    /**
+     * Load all 5 main home feeds concurrently from the Cloudflare Worker:
+     * - Trending -> /api/movies/trending
+     * - Popular -> /api/movies/popular
+     * - Action -> /api/movies/action
+     * - Now Playing -> /api/movies/now-playing
+     * - Upcoming -> /api/movies/upcoming
+     */
+    fun loadHomeFeeds() {
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            _homeFeedState.value = _homeFeedState.value.copy(
+                isLoading = true,
+                isError = false,
+                errorMessage = ""
+            )
+
+            try {
+                val trendingDeferred = async(Dispatchers.IO) { MovieApiClient.getTrendingMovies(app) }
+                val popularDeferred = async(Dispatchers.IO) { MovieApiClient.getPopularMovies(app) }
+                val actionDeferred = async(Dispatchers.IO) { MovieApiClient.getActionMovies(app) }
+                val nowPlayingDeferred = async(Dispatchers.IO) { MovieApiClient.getNowPlayingMovies(app) }
+                val upcomingDeferred = async(Dispatchers.IO) { MovieApiClient.getUpcomingMovies(app) }
+
+                val trending = trendingDeferred.await()
+                val popular = popularDeferred.await()
+                val action = actionDeferred.await()
+                val nowPlaying = nowPlayingDeferred.await()
+                val upcoming = upcomingDeferred.await()
+
+                val allFetched: List<Movie> = (trending + popular + action + nowPlaying + upcoming).distinctBy { it.id }
+                if (allFetched.isNotEmpty()) {
+                    val currentMap = _dynamicMovies.value.toMutableMap()
+                    for (movie in allFetched) {
+                        currentMap[movie.id] = movie
+                    }
+                    _dynamicMovies.value = currentMap
+                    repository.cacheMovies(allFetched)
+                }
+
+                if (trending.isEmpty() && popular.isEmpty() && action.isEmpty() && nowPlaying.isEmpty() && upcoming.isEmpty()) {
+                    // Check if we have cached movies as fallback
+                    val cached = cachedMovies.value
+                    if (cached.isNotEmpty()) {
+                        _homeFeedState.value = HomeFeedState(
+                            isLoading = false,
+                            isError = false,
+                            errorMessage = "",
+                            trending = cached.take(5),
+                            popular = cached.drop(5).take(6),
+                            action = cached.filter { it.genres.any { g -> g.contains("Action", ignoreCase = true) } },
+                            nowPlaying = cached.takeLast(6),
+                            upcoming = cached.shuffled().take(6)
+                        )
+                    } else {
+                        _homeFeedState.value = HomeFeedState(
+                            isLoading = false,
+                            isError = true,
+                            errorMessage = "Unable to load movies from the server. Please check your connection and tap retry.",
+                            trending = emptyList(),
+                            popular = emptyList(),
+                            action = emptyList(),
+                            nowPlaying = emptyList(),
+                            upcoming = emptyList()
+                        )
+                    }
+                } else {
+                    _homeFeedState.value = HomeFeedState(
+                        isLoading = false,
+                        isError = false,
+                        errorMessage = "",
+                        trending = if (trending.isNotEmpty()) trending else popular.take(5),
+                        popular = popular,
+                        action = action,
+                        nowPlaying = nowPlaying,
+                        upcoming = upcoming
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed loading home feeds from backend: ${e.message}", e)
+                _homeFeedState.value = _homeFeedState.value.copy(
+                    isLoading = false,
+                    isError = true,
+                    errorMessage = e.localizedMessage ?: "Failed to connect to movie server"
+                )
             }
         }
     }
 
-    // Filtered search results combining local database, uploaded R2 movies, Room cache, and TMDB live results
+    /**
+     * Loads single movie details from GET /api/movies/movie/:id
+     * and recommendations from GET /api/movies/movie/:id/recommendations
+     */
+    fun loadMovieDetails(movieId: String, forceReload: Boolean = false) {
+        val existing = _movieDetailsMap.value[movieId]
+        if (!forceReload && existing?.movie != null && existing.recommendations.isNotEmpty()) {
+            return
+        }
+
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            val baseFallback = existing?.movie ?: getMovieById(movieId)
+
+            _movieDetailsMap.value = _movieDetailsMap.value + (movieId to MovieDetailsState(
+                isLoading = (baseFallback == null),
+                isError = false,
+                errorMessage = "",
+                movie = baseFallback,
+                recommendations = existing?.recommendations ?: emptyList(),
+                isLoadingRecommendations = true
+            ))
+
+            try {
+                // 1. Fetch movie details
+                val movieDeferred = async(Dispatchers.IO) {
+                    MovieApiClient.getMovieById(app, movieId)
+                }
+                // 2. Fetch recommendations
+                val recsDeferred = async(Dispatchers.IO) {
+                    MovieApiClient.getRecommendations(app, movieId)
+                }
+
+                val fetchedMovie = movieDeferred.await()
+                val recommendations = recsDeferred.await()
+
+                val finalMovie = fetchedMovie ?: baseFallback
+
+                if (finalMovie != null) {
+                    val map = _dynamicMovies.value.toMutableMap()
+                    map[finalMovie.id] = finalMovie
+                    for (rec in recommendations) {
+                        map[rec.id] = rec
+                    }
+                    _dynamicMovies.value = map
+                    repository.cacheMovie(finalMovie)
+                    if (recommendations.isNotEmpty()) {
+                        repository.cacheMovies(recommendations)
+                    }
+
+                    _movieDetailsMap.value = _movieDetailsMap.value + (movieId to MovieDetailsState(
+                        isLoading = false,
+                        isError = false,
+                        errorMessage = "",
+                        movie = finalMovie,
+                        recommendations = recommendations,
+                        isLoadingRecommendations = false
+                    ))
+                } else {
+                    _movieDetailsMap.value = _movieDetailsMap.value + (movieId to MovieDetailsState(
+                        isLoading = false,
+                        isError = true,
+                        errorMessage = "Could not load movie details. Please try again.",
+                        movie = null,
+                        recommendations = emptyList(),
+                        isLoadingRecommendations = false
+                    ))
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading movie details for $movieId: ${e.message}", e)
+                val finalFallback = existing?.movie ?: getMovieById(movieId)
+                _movieDetailsMap.value = _movieDetailsMap.value + (movieId to MovieDetailsState(
+                    isLoading = false,
+                    isError = (finalFallback == null),
+                    errorMessage = e.localizedMessage ?: "Failed to connect to server",
+                    movie = finalFallback,
+                    recommendations = existing?.recommendations ?: emptyList(),
+                    isLoadingRecommendations = false
+                ))
+            }
+        }
+    }
+
+    // Filtered search results combining real API results, local database, and uploaded R2 movies
     val searchResults: StateFlow<List<Movie>> = combine(
         _searchQuery,
         _selectedGenreFilter,
-        _tmdbSearchResults,
+        _apiSearchResults,
         _dynamicMovies,
         uploadedMovies
-    ) { query, genreFilter, tmdbResults, dynamicMap, uploadedList ->
-        val localList = (uploadedList + cachedMovies.value + allMovies + dynamicMap.values).distinctBy { it.id }
-
-        val filteredLocal = localList.filter { movie ->
-            val matchesGenre = genreFilter == null ||
+    ) { query, genreFilter, apiResults, dynamicMap, uploadedList ->
+        val cleanQuery = query.trim()
+        if (cleanQuery.isNotBlank() && apiResults.isNotEmpty()) {
+            if (genreFilter != null) {
+                apiResults.filter { movie ->
                     movie.category.equals(genreFilter, ignoreCase = true) ||
-                    movie.genres.any { it.equals(genreFilter, ignoreCase = true) }
+                            movie.genres.any { it.equals(genreFilter, ignoreCase = true) }
+                }
+            } else {
+                apiResults
+            }
+        } else {
+            val localList = (uploadedList + cachedMovies.value + allMovies + dynamicMap.values).distinctBy { it.id }
+            localList.filter { movie ->
+                val matchesGenre = genreFilter == null ||
+                        movie.category.equals(genreFilter, ignoreCase = true) ||
+                        movie.genres.any { it.equals(genreFilter, ignoreCase = true) }
 
-            val cleanQuery = query.trim()
-            val matchesQuery = cleanQuery.isBlank() ||
-                    movie.id.equals(cleanQuery, ignoreCase = true) ||
-                    movie.title.contains(cleanQuery, ignoreCase = true) ||
-                    movie.description.contains(cleanQuery, ignoreCase = true) ||
-                    movie.director.contains(cleanQuery, ignoreCase = true) ||
-                    movie.cast.any { it.name.contains(cleanQuery, ignoreCase = true) } ||
-                    movie.genres.any { it.contains(cleanQuery, ignoreCase = true) }
+                val matchesQuery = cleanQuery.isBlank() ||
+                        movie.id.equals(cleanQuery, ignoreCase = true) ||
+                        movie.title.contains(cleanQuery, ignoreCase = true) ||
+                        movie.description.contains(cleanQuery, ignoreCase = true) ||
+                        movie.director.contains(cleanQuery, ignoreCase = true) ||
+                        movie.cast.any { it.name.contains(cleanQuery, ignoreCase = true) } ||
+                        movie.genres.any { it.contains(cleanQuery, ignoreCase = true) }
 
-            matchesGenre && matchesQuery
+                matchesGenre && matchesQuery
+            }
         }
-
-        // Combine local results with live TMDB results, avoiding duplicates by movie id
-        val combined = (filteredLocal + tmdbResults).distinctBy { it.id }
-        combined
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), allMovies)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Current Active Playing Movie
     private val _currentPlayingMovie = MutableStateFlow<Movie?>(null)
@@ -271,60 +480,50 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateSearchQuery(query: String) {
         _searchQuery.value = query
+        _searchErrorMessage.value = null
 
-        tmdbSearchJob?.cancel()
+        searchJob?.cancel()
         if (query.isBlank()) {
-            _tmdbSearchResults.value = emptyList()
-            _isSearchingTmdb.value = false
+            _apiSearchResults.value = emptyList()
+            _isSearching.value = false
             return
         }
 
-        // If user entered a numeric ID like 27205 or a search term, query TMDB live
-        if (isTmdbLiveConfigured) {
-            tmdbSearchJob = viewModelScope.launch {
-                delay(300) // Debounce
-                _isSearchingTmdb.value = true
-                try {
-                    val cleanQuery = query.trim()
-                    val results = TmdbClient.searchMovies(cleanQuery)
-                    _tmdbSearchResults.value = results
-
-                    // Also cache any fetched movies into _dynamicMovies and persistent Room database
-                    if (results.isNotEmpty()) {
-                        val currentMap = _dynamicMovies.value.toMutableMap()
-                        results.forEach { currentMap[it.id] = it }
-                        _dynamicMovies.value = currentMap
-                        repository.cacheMovies(results)
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error querying TMDB for $query: ${e.message}")
-                } finally {
-                    _isSearchingTmdb.value = false
-                }
-            }
-        }
-    }
-
-    fun fetchTmdbMovieById(movieId: String) {
-        if (!isTmdbLiveConfigured) return
-        viewModelScope.launch {
+        val app = getApplication<Application>()
+        searchJob = viewModelScope.launch {
+            delay(350) // Debounce typing
+            _isSearching.value = true
             try {
-                val movie = TmdbClient.getMovieById(movieId)
-                if (movie != null) {
+                val cleanQuery = query.trim()
+                val results = MovieApiClient.searchMovies(app, cleanQuery)
+                _apiSearchResults.value = results
+
+                if (results.isNotEmpty()) {
                     val currentMap = _dynamicMovies.value.toMutableMap()
-                    currentMap[movie.id] = movie
+                    for (item in results) {
+                        currentMap[item.id] = item
+                    }
                     _dynamicMovies.value = currentMap
-                    repository.cacheMovie(movie)
+                    repository.cacheMovies(results)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error fetching TMDB movie $movieId: ${e.message}")
+                Log.e(TAG, "Error querying search on backend for $query: ${e.message}")
+                _searchErrorMessage.value = "Failed to search movies: ${e.localizedMessage}"
+            } finally {
+                _isSearching.value = false
             }
         }
     }
 
     fun getMovieById(id: String): Movie? {
         return uploadedMovies.value.firstOrNull { it.id == id }
+            ?: _movieDetailsMap.value[id]?.movie
             ?: _dynamicMovies.value[id]
+            ?: _homeFeedState.value.trending.firstOrNull { it.id == id }
+            ?: _homeFeedState.value.popular.firstOrNull { it.id == id }
+            ?: _homeFeedState.value.action.firstOrNull { it.id == id }
+            ?: _homeFeedState.value.nowPlaying.firstOrNull { it.id == id }
+            ?: _homeFeedState.value.upcoming.firstOrNull { it.id == id }
             ?: watchlistMovies.value.firstOrNull { it.id == id }
             ?: cachedMovies.value.firstOrNull { it.id == id }
             ?: downloadedMovies.value.firstOrNull { it.movieId == id }?.toMovie()
@@ -735,9 +934,37 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     finalPosterUrl = "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=800&q=80"
                 }
 
-                // 4. Save to Room database
-                _uploadStatusText.value = "Registering movie in Movie Room catalog..."
-                _uploadProgress.value = 0.96f
+                // 4. Save to Firestore via Worker and local Room database
+                _uploadStatusText.value = "Persisting movie document to Firestore catalog..."
+                _uploadProgress.value = 0.94f
+
+                val videoKey = if (r2Key.isNotBlank()) r2Key else "movies/${timestamp}_$cleanTitle.mp4"
+                val trailerKey = "trailers/${timestamp}_${cleanTitle}_trailer.mp4"
+
+                val movieMap = mapOf(
+                    "id" to movieId,
+                    "title" to title.trim(),
+                    "overview" to description.trim().ifBlank { "Exclusive movie uploaded via Cloudflare R2 storage." },
+                    "poster" to finalPosterUrl,
+                    "backdrop" to finalPosterUrl,
+                    "video_key" to videoKey,
+                    "trailer_key" to trailerKey,
+                    "release_date" to year.toString(),
+                    "rating" to rating,
+                    "runtime" to durationMinutes,
+                    "genres" to genres.split(",").map { it.trim() }.filter { it.isNotBlank() },
+                    "category" to category.trim().ifBlank { "Action" },
+                    "published" to true
+                )
+
+                val createResult = MovieApiClient.adminCreateMovie(context, movieMap)
+                if (createResult.isFailure) {
+                    val err = createResult.exceptionOrNull()?.message ?: "Failed to create movie in Firestore"
+                    onFinished(false, "Firestore catalog error: $err")
+                    return@launch
+                }
+
+                MovieApiClient.adminPublishMovie(context, movieId)
 
                 val entity = UploadedMovieEntity(
                     id = movieId,
@@ -755,7 +982,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     studio = "Cloudflare R2 Cinema",
                     category = category.ifBlank { "Action" },
                     uploadedAt = timestamp,
-                    r2StorageKey = r2Key
+                    r2StorageKey = videoKey
                 )
 
                 repository.saveUploadedMovie(entity)

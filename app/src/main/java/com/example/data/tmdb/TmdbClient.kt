@@ -1,121 +1,56 @@
 package com.example.data.tmdb
 
 import android.util.Log
-import com.example.BuildConfig
+import com.example.data.api.MovieApiClient
 import com.example.model.Movie
-import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
-import okhttp3.Interceptor
-import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
-import retrofit2.Retrofit
-import retrofit2.converter.moshi.MoshiConverterFactory
-import java.util.concurrent.TimeUnit
 
+/**
+ * TMDB Client Proxy:
+ * Routes movie queries securely through our Cloudflare Worker backend.
+ * ZERO private TMDB API keys are required or stored in the APK.
+ */
 object TmdbClient {
     private const val TAG = "TmdbClient"
-    private const val BASE_URL = "https://api.themoviedb.org/3/"
-
-    // Injected securely via BuildConfig & AI Studio Secrets
-    val rawApiKey: String = try {
-        BuildConfig.TMDB_API_KEY.trim()
-    } catch (e: Throwable) {
-        ""
-    }
-
-    val isApiKeyConfigured: Boolean
-        get() = rawApiKey.isNotBlank() &&
-                !rawApiKey.equals("YOUR_TMDB_API_KEY_HERE", ignoreCase = true) &&
-                !rawApiKey.equals("MY_TMDB_API_KEY", ignoreCase = true)
-
-    private val authInterceptor = Interceptor { chain ->
-        val originalRequest = chain.request()
-        val originalUrl = originalRequest.url
-
-        if (!isApiKeyConfigured) {
-            return@Interceptor chain.proceed(originalRequest)
-        }
-
-        val newRequest = if (rawApiKey.startsWith("ey", ignoreCase = false)) {
-            // TMDB v4 Bearer Read Access Token
-            originalRequest.newBuilder()
-                .header("Authorization", "Bearer $rawApiKey")
-                .header("Accept", "application/json")
-                .build()
-        } else {
-            // TMDB v3 API Key as query parameter
-            val newUrl = originalUrl.newBuilder()
-                .addQueryParameter("api_key", rawApiKey)
-                .build()
-            originalRequest.newBuilder()
-                .url(newUrl)
-                .header("Accept", "application/json")
-                .build()
-        }
-
-        chain.proceed(newRequest)
-    }
-
-    private val loggingInterceptor = HttpLoggingInterceptor().apply {
-        level = HttpLoggingInterceptor.Level.BASIC
-    }
-
-    private val okHttpClient = OkHttpClient.Builder()
-        .addInterceptor(authInterceptor)
-        .addInterceptor(loggingInterceptor)
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .build()
-
-    private val moshi = Moshi.Builder()
-        .add(KotlinJsonAdapterFactory())
-        .build()
-
-    private val retrofit = Retrofit.Builder()
-        .baseUrl(BASE_URL)
-        .client(okHttpClient)
-        .addConverterFactory(MoshiConverterFactory.create(moshi))
-        .build()
-
-    val api: TmdbApiService = retrofit.create(TmdbApiService::class.java)
 
     /**
-     * Fetches real movie details and cover image from TMDB by movie ID (e.g. 27205 for Inception)
+     * Always returns true because the Cloudflare Worker backend securely handles TMDB credentials.
+     */
+    val isApiKeyConfigured: Boolean
+        get() = true
+
+    /**
+     * Fetches movie details and cover image via our secure Cloudflare Worker API
      */
     suspend fun getMovieById(movieId: String): Movie? {
-        if (!isApiKeyConfigured) {
-            Log.d(TAG, "TMDB API Key is not configured in Secrets panel")
-            return null
-        }
         return try {
-            val response = api.getMovieDetails(movieId = movieId)
-            response.toDomainMovie()
+            val cleanId = if (movieId.startsWith("tmdb_")) movieId else "tmdb_$movieId"
+            MovieApiClient.getMovieById(id = cleanId)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to fetch TMDB movie $movieId: ${e.message}", e)
+            Log.e(TAG, "Failed fetching movie via backend: ${e.message}")
             null
         }
     }
 
     /**
-     * Search movies on TMDB by text or ID
+     * Search movies securely via our Cloudflare Worker backend
      */
     suspend fun searchMovies(query: String): List<Movie> {
-        if (!isApiKeyConfigured || query.isBlank()) return emptyList()
-
         return try {
-            val numericId = query.trim().toIntOrNull()
-            if (numericId != null) {
-                // Direct lookup by TMDB ID (like 27205)
-                val directMovie = getMovieById(numericId.toString())
-                if (directMovie != null) {
-                    return listOf(directMovie)
-                }
-            }
-
-            val searchResponse = api.searchMovies(query = query)
-            searchResponse.results?.map { it.toDomainMovie() } ?: emptyList()
+            MovieApiClient.searchMovies(query = query)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to search TMDB for '$query': ${e.message}", e)
+            Log.e(TAG, "Search error via backend: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
+     * Fetches trending movies securely from the Cloudflare Worker backend
+     */
+    suspend fun getTrendingMovies(): List<Movie> {
+        return try {
+            MovieApiClient.getTrendingMovies()
+        } catch (e: Exception) {
+            Log.e(TAG, "Trending fetch error: ${e.message}")
             emptyList()
         }
     }

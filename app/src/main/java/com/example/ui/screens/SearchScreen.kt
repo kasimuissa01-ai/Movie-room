@@ -19,14 +19,19 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.TrendingUp
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -36,6 +41,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.SampleMovies
@@ -47,7 +53,6 @@ import com.example.ui.components.GenreBadge
 import com.example.ui.components.MovieGrid
 import com.example.ui.theme.CineBlack
 import com.example.ui.theme.CineRedPrimary
-import com.example.ui.theme.CineSurfaceElevated
 import com.example.ui.theme.CineTextMuted
 import com.example.ui.theme.CineTextPrimary
 import com.example.ui.theme.CineTextSecondary
@@ -66,8 +71,9 @@ fun SearchScreen(
     onClearRecentSearches: () -> Unit,
     onMovieClick: (Movie) -> Unit,
     modifier: Modifier = Modifier,
-    isSearchingTmdb: Boolean = false,
-    isTmdbLive: Boolean = false
+    isSearching: Boolean = false,
+    searchErrorMessage: String? = null,
+    onRetrySearch: () -> Unit = {}
 ) {
     Box(
         modifier = modifier
@@ -91,30 +97,6 @@ fun SearchScreen(
                         onSelectGenre(null)
                     }
                 )
-            }
-
-            // TMDB Live Status Banner
-            if (isTmdbLive && query.isNotBlank()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(androidx.compose.foundation.shape.CircleShape)
-                            .background(if (isSearchingTmdb) CineRedPrimary else Color(0xFF4CAF50))
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (isSearchingTmdb) "Searching TMDB live..." else "TMDB Live Connected",
-                        color = CineTextMuted,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
             }
 
             // Genre Chips Filter Bar
@@ -253,6 +235,80 @@ fun SearchScreen(
 
                     item(key = "bottom_space") {
                         Spacer(modifier = Modifier.height(88.dp))
+                    }
+                }
+            } else if (isSearching) {
+                // Loading search results
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    CircularProgressIndicator(
+                        color = CineRedPrimary,
+                        strokeWidth = 3.dp,
+                        modifier = Modifier.size(40.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "Searching movies...",
+                        color = CineTextSecondary,
+                        fontSize = 14.sp
+                    )
+                }
+            } else if (searchErrorMessage != null && searchResults.isEmpty()) {
+                // Error search results
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(CircleShape)
+                            .background(CineRedPrimary.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudOff,
+                            contentDescription = null,
+                            tint = CineRedPrimary,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "Search request failed",
+                        color = CineTextPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = searchErrorMessage,
+                        color = CineTextSecondary,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Button(
+                        onClick = onRetrySearch,
+                        colors = ButtonDefaults.buttonColors(containerColor = CineRedPrimary),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Retry", color = Color.White, fontWeight = FontWeight.Bold)
                     }
                 }
             } else {
