@@ -176,3 +176,17 @@ jobs:
             ${{ steps.prep.outputs.apk_path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Deploy Cloudflare Worker to Production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "Deploying Cloudflare Worker 'movie-api' from worker/ directory..."
+            cd worker
+            npx wrangler deploy --name movie-api --compatibility-date 2024-03-01
+            cd ..
+          else
+            echo "CLOUDFLARE_API_TOKEN not set; skipping Worker deployment."
+          fi
