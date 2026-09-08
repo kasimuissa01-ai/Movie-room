@@ -272,10 +272,14 @@ object AppUpdateManager {
         val cleanLatest = latest.trim().removePrefix("v")
         val cleanCurrent = current.trim().removePrefix("v")
         if (cleanLatest.isBlank() || cleanCurrent.isBlank()) return false
-        if (cleanLatest == cleanCurrent) return false
+        if (cleanLatest.equals(cleanCurrent, ignoreCase = true)) return false
 
-        val latestParts = cleanLatest.split(".").mapNotNull { it.toIntOrNull() }
-        val currentParts = cleanCurrent.split(".").mapNotNull { it.toIntOrNull() }
+        // Extract base version e.g. "1.0.2" from "1.0.2-b3"
+        val baseLatest = cleanLatest.substringBefore("-").substringBefore("+").substringBefore("_")
+        val baseCurrent = cleanCurrent.substringBefore("-").substringBefore("+").substringBefore("_")
+
+        val latestParts = baseLatest.split(".").mapNotNull { it.toIntOrNull() }
+        val currentParts = baseCurrent.split(".").mapNotNull { it.toIntOrNull() }
 
         val maxLen = maxOf(latestParts.size, currentParts.size)
         for (i in 0 until maxLen) {
@@ -284,16 +288,21 @@ object AppUpdateManager {
             if (l > c) return true
             if (l < c) return false
         }
-        return false
+
+        // If base versions are identical, check if latest contains build suffix that might indicate newer build
+        val latestBuild = cleanLatest.substringAfter("-b", "").substringAfter("-", "").toIntOrNull() ?: 0
+        val currentBuild = cleanCurrent.substringAfter("-b", "").substringAfter("-", "").toIntOrNull() ?: 0
+        return latestBuild > currentBuild
     }
 
     private fun parseVersionNameToCode(versionName: String): Long {
-        val parts = versionName.trim().removePrefix("v").split(".").mapNotNull { it.toIntOrNull() }
+        val clean = versionName.trim().removePrefix("v").substringBefore("-").substringBefore("+")
+        val parts = clean.split(".").mapNotNull { it.toIntOrNull() }
         var code = 0L
         for (part in parts) {
             code = code * 100 + part
         }
-        return if (code > 0) code else 2L
+        return if (code > 0) code else 3L
     }
 
     /**

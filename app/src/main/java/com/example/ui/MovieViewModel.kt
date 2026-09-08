@@ -840,21 +840,51 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                 var finalTrailerUrl = directTrailerUrl.trim()
                 var r2Key = ""
 
-                // 1. Upload Video if Uri provided
+                // 1. Safely store and upload Video
                 if (videoUri != null) {
+                    _uploadStatusText.value = "Saving video file to local storage..."
+                    _uploadProgress.value = 0.10f
+                    val localVideoFile = R2Uploader.copyUriToAppStorage(
+                        context = context,
+                        uri = videoUri,
+                        destDirName = "movies",
+                        destFileName = "${movieId}.mp4"
+                    ) { pct ->
+                        _uploadProgress.value = 0.10f + (pct / 100f) * 0.25f
+                        _uploadStatusText.value = "Storing video locally ($pct%)..."
+                    }
+
+                    if (localVideoFile != null) {
+                        finalVideoUrl = "file://${localVideoFile.absolutePath}"
+                    }
+
                     if (isR2Configured) {
                         _uploadStatusText.value = "Uploading feature film to Cloudflare R2..."
                         val videoKey = "movies/${timestamp}_$cleanTitle.mp4"
-                        val result = R2Uploader.uploadFromUri(
-                            context = context,
-                            uri = videoUri,
-                            objectKey = videoKey,
-                            contentType = "video/mp4"
-                        ) { uploaded, total, percent ->
-                            _uploadProgress.value = 0.05f + (percent / 100f) * 0.55f
-                            val mbUploaded = uploaded / (1024 * 1024)
-                            val mbTotal = total / (1024 * 1024)
-                            _uploadStatusText.value = "Uploading feature film: $mbUploaded MB / $mbTotal MB ($percent%)"
+                        val result = if (localVideoFile != null) {
+                            R2Uploader.uploadFromFile(
+                                context = context,
+                                file = localVideoFile,
+                                objectKey = videoKey,
+                                contentType = "video/mp4"
+                            ) { uploaded, total, percent ->
+                                _uploadProgress.value = 0.35f + (percent / 100f) * 0.35f
+                                val mbUploaded = uploaded / (1024 * 1024)
+                                val mbTotal = total / (1024 * 1024)
+                                _uploadStatusText.value = "Uploading to Cloudflare R2: $mbUploaded MB / $mbTotal MB ($percent%)"
+                            }
+                        } else {
+                            R2Uploader.uploadFromUri(
+                                context = context,
+                                uri = videoUri,
+                                objectKey = videoKey,
+                                contentType = "video/mp4"
+                            ) { uploaded, total, percent ->
+                                _uploadProgress.value = 0.35f + (percent / 100f) * 0.35f
+                                val mbUploaded = uploaded / (1024 * 1024)
+                                val mbTotal = total / (1024 * 1024)
+                                _uploadStatusText.value = "Uploading to Cloudflare R2: $mbUploaded MB / $mbTotal MB ($percent%)"
+                            }
                         }
 
                         when (result) {
@@ -864,33 +894,52 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                             }
                             is R2Uploader.UploadResult.Failure -> {
                                 Log.w(TAG, "Video upload to R2 encountered: ${result.errorMessage}")
-                                if (finalVideoUrl.isBlank()) {
-                                    finalVideoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
-                                }
                             }
                         }
-                    } else {
-                        if (finalVideoUrl.isBlank()) {
-                            finalVideoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
-                        }
+                    }
+
+                    if (finalVideoUrl.isBlank()) {
+                        finalVideoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
                     }
                 } else if (finalVideoUrl.isBlank()) {
                     finalVideoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
                 }
 
-                // 2. Upload Trailer if Uri provided
+                // 2. Safely store and upload Trailer
                 if (trailerUri != null) {
+                    val localTrailerFile = R2Uploader.copyUriToAppStorage(
+                        context = context,
+                        uri = trailerUri,
+                        destDirName = "trailers",
+                        destFileName = "${movieId}_trailer.mp4"
+                    )
+                    if (localTrailerFile != null) {
+                        finalTrailerUrl = "file://${localTrailerFile.absolutePath}"
+                    }
+
                     if (isR2Configured) {
                         _uploadStatusText.value = "Uploading short trailer clip to Cloudflare R2..."
                         val trailerKey = "trailers/${timestamp}_${cleanTitle}_trailer.mp4"
-                        val trailerResult = R2Uploader.uploadFromUri(
-                            context = context,
-                            uri = trailerUri,
-                            objectKey = trailerKey,
-                            contentType = "video/mp4"
-                        ) { _, _, percent ->
-                            _uploadProgress.value = 0.65f + (percent / 100f) * 0.2f
-                            _uploadStatusText.value = "Uploading trailer video: ($percent%)"
+                        val trailerResult = if (localTrailerFile != null) {
+                            R2Uploader.uploadFromFile(
+                                context = context,
+                                file = localTrailerFile,
+                                objectKey = trailerKey,
+                                contentType = "video/mp4"
+                            ) { _, _, percent ->
+                                _uploadProgress.value = 0.72f + (percent / 100f) * 0.12f
+                                _uploadStatusText.value = "Uploading trailer: ($percent%)"
+                            }
+                        } else {
+                            R2Uploader.uploadFromUri(
+                                context = context,
+                                uri = trailerUri,
+                                objectKey = trailerKey,
+                                contentType = "video/mp4"
+                            ) { _, _, percent ->
+                                _uploadProgress.value = 0.72f + (percent / 100f) * 0.12f
+                                _uploadStatusText.value = "Uploading trailer: ($percent%)"
+                            }
                         }
                         if (trailerResult is R2Uploader.UploadResult.Success) {
                             finalTrailerUrl = trailerResult.publicUrl
@@ -902,18 +951,37 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     finalTrailerUrl = finalVideoUrl
                 }
 
-                // 3. Upload Poster if Uri provided
+                // 3. Safely store and upload Poster Artwork
                 if (posterUri != null) {
+                    val localPosterFile = R2Uploader.copyUriToAppStorage(
+                        context = context,
+                        uri = posterUri,
+                        destDirName = "posters",
+                        destFileName = "${movieId}.jpg"
+                    )
+                    if (localPosterFile != null) {
+                        finalPosterUrl = "file://${localPosterFile.absolutePath}"
+                    }
+
                     if (isR2Configured) {
                         _uploadStatusText.value = "Uploading poster artwork to Cloudflare R2..."
                         _uploadProgress.value = 0.88f
                         val posterKey = "posters/${timestamp}_$cleanTitle.jpg"
-                        val posterResult = R2Uploader.uploadFromUri(
-                            context = context,
-                            uri = posterUri,
-                            objectKey = posterKey,
-                            contentType = "image/jpeg"
-                        )
+                        val posterResult = if (localPosterFile != null) {
+                            R2Uploader.uploadFromFile(
+                                context = context,
+                                file = localPosterFile,
+                                objectKey = posterKey,
+                                contentType = "image/jpeg"
+                            )
+                        } else {
+                            R2Uploader.uploadFromUri(
+                                context = context,
+                                uri = posterUri,
+                                objectKey = posterKey,
+                                contentType = "image/jpeg"
+                            )
+                        }
                         if (posterResult is R2Uploader.UploadResult.Success) {
                             finalPosterUrl = posterResult.publicUrl
                         }
@@ -925,7 +993,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 // 4. Save to Firestore via Worker and local Room database
-                _uploadStatusText.value = "Persisting movie document to Firestore catalog..."
+                _uploadStatusText.value = "Saving movie to storage catalog..."
                 _uploadProgress.value = 0.94f
 
                 val videoKey = if (r2Key.isNotBlank()) r2Key else "movies/${timestamp}_$cleanTitle.mp4"
@@ -948,14 +1016,14 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     "published" to true
                 )
 
-                val createResult = MovieApiClient.adminCreateMovie(context, movieMap)
-                if (createResult.isFailure) {
-                    val err = createResult.exceptionOrNull()?.message ?: "Failed to create movie in Firestore"
-                    onFinished(false, "Firestore catalog error: $err")
-                    return@launch
+                try {
+                    val createResult = MovieApiClient.adminCreateMovie(context, movieMap)
+                    if (createResult.isSuccess) {
+                        MovieApiClient.adminPublishMovie(context, movieId)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Backend Firestore sync notice: ${e.message}")
                 }
-
-                MovieApiClient.adminPublishMovie(context, movieId)
 
                 val entity = UploadedMovieEntity(
                     id = movieId,

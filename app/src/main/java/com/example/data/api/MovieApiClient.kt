@@ -244,7 +244,56 @@ object MovieApiClient {
         }
     }
 
+    private val uploadOkHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(60, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.MINUTES)
+            .writeTimeout(30, TimeUnit.MINUTES)
+            .callTimeout(30, TimeUnit.MINUTES)
+            .retryOnConnectionFailure(true)
+            .build()
+    }
+
     // --- Admin Media Upload to Cloudflare R2 via Worker ---
+    suspend fun uploadStreamingMediaToR2(
+        context: Context,
+        filename: String,
+        requestBody: okhttp3.RequestBody,
+        contentType: String,
+        folder: String = "movies"
+    ): Result<R2UploadResponse> = withContext(Dispatchers.IO) {
+        val token = BackendConfig.getAuthToken(context)
+        val authHeader = if (!token.isNullOrBlank()) "Bearer $token" else ""
+
+        try {
+            val baseUrl = BackendConfig.getBaseUrl(context)
+            val formattedBase = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
+            val uploadService = Retrofit.Builder()
+                .baseUrl(formattedBase)
+                .client(uploadOkHttpClient)
+                .addConverterFactory(MoshiConverterFactory.create(moshi))
+                .build()
+                .create(MovieApiService::class.java)
+
+            val res = uploadService.adminUploadR2(
+                authHeader = authHeader,
+                filename = filename,
+                folder = folder,
+                contentType = contentType,
+                fileBody = requestBody
+            )
+
+            if (res.success) {
+                Result.success(res)
+            } else {
+                Result.failure(Exception(res.error ?: res.message ?: "Upload failed"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "R2 streaming upload error: ${e.message}", e)
+            Result.failure(Exception("Unable to upload media to server: ${e.message}"))
+        }
+    }
+
     suspend fun uploadMediaToR2(
         context: Context,
         filename: String,

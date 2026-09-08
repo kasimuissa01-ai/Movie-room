@@ -883,7 +883,7 @@ fun ProfileScreen(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "Version 2.4.0 (Build 2026.04) • Dolby Atmos Certified",
+                        text = "Version $currentVersionName (Build $currentVersionCode)",
                         color = CineTextMuted.copy(alpha = 0.6f),
                         fontSize = 11.sp
                     )
