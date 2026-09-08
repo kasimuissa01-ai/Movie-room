@@ -19,7 +19,7 @@ import com.example.data.entity.WatchlistItemEntity
         DownloadedMovieEntity::class,
         CachedMovieEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class MovieDatabase : RoomDatabase() {

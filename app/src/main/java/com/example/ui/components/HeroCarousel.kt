@@ -77,9 +77,9 @@ fun HeroCarousel(
     val pagerState = rememberPagerState(pageCount = { movies.size })
     val coroutineScope = rememberCoroutineScope()
 
-    // Auto-advance every 6 seconds unless user is interacting
-    LaunchedEffect(pagerState.isScrollInProgress) {
-        if (!pagerState.isScrollInProgress) {
+    // Auto-advance horizontally every 6 seconds unless user is dragging
+    LaunchedEffect(pagerState.isScrollInProgress, movies.size) {
+        if (!pagerState.isScrollInProgress && movies.size > 1) {
             while (true) {
                 delay(6000)
                 val nextPage = (pagerState.currentPage + 1) % movies.size
@@ -149,7 +149,7 @@ fun HeroCarousel(
                         )
                 )
 
-                // Movie Information Overlay
+                // Movie Information Overlay: Only Name (Title) + Watch & Download Buttons
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
@@ -177,52 +177,40 @@ fun HeroCarousel(
                         RatingBadge(rating = movie.rating)
                     }
 
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                    // Title
+                    // Movie Name / Title (Prominent marketing display)
                     Text(
                         text = movie.title.uppercase(),
                         color = CineTextPrimary,
                         fontSize = 28.sp,
                         fontWeight = FontWeight.Black,
                         letterSpacing = (-0.5).sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    // Short description
-                    Text(
-                        text = movie.description,
-                        color = CineTextSecondary,
-                        fontSize = 13.sp,
-                        lineHeight = 18.sp,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
 
-                    // Action Buttons: [ Watch Now ] and [ Download ] with status card & details info
+                    // Action Buttons: Only [ Watch Now ] and [ Download ]
                     val isDownloaded = isMovieDownloaded(movie.id)
                     val progress = downloadProgress(movie.id)
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // 1. WATCH NOW / PLAY
+                        // 1. WATCH NOW / PLAY BUTTON
                         PrimaryButton(
                             text = if (isDownloaded) "Watch Offline" else "Watch Now",
                             icon = Icons.Default.PlayArrow,
                             onClick = { onWatchClick(movie) },
-                            modifier = Modifier.weight(1.1f),
+                            modifier = Modifier.weight(1f),
                             testTag = "hero_watch_button"
                         )
 
-                        // 2. DOWNLOAD ACTION BUTTON / STATUS CARD (Directly facilitates downloading)
+                        // 2. DOWNLOAD BUTTON / PROGRESS
                         if (progress != null && progress in 0..99) {
                             Card(
                                 shape = RoundedCornerShape(12.dp),
@@ -297,47 +285,6 @@ fun HeroCarousel(
                                 testTag = "hero_download_button"
                             )
                         }
-
-                        // 3. Compact Info button to view full movie details & synopsis
-                        IconButton(
-                            onClick = { onMovieClick(movie) },
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(CineSurfaceElevated)
-                                .border(BorderStroke(1.dp, CineCardBorder), RoundedCornerShape(12.dp))
-                                .testTag("hero_more_info_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = "More Info",
-                                tint = CineTextSecondary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Reassurance note: in-app private download, never in phone gallery
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        modifier = Modifier.padding(start = 2.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Security,
-                            contentDescription = null,
-                            tint = CineGold,
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Text(
-                            text = "Private In-App Download • Saved in Downloads tab (never in phone gallery)",
-                            color = CineTextMuted,
-                            fontSize = 10.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
                     }
                 }
             }

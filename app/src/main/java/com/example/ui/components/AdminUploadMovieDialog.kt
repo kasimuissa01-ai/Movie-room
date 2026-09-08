@@ -121,6 +121,7 @@ fun AdminUploadMovieDialog(
     var directVideoUrl by remember { mutableStateOf("") }
     var directTrailerUrl by remember { mutableStateOf("") }
     var directPosterUrl by remember { mutableStateOf("") }
+    var isHeroFeatured by remember { mutableStateOf(true) }
 
     val isUploading = viewModel.isUploading.value
     val uploadProgress = viewModel.uploadProgress.value
@@ -296,7 +297,7 @@ fun AdminUploadMovieDialog(
                                 searchQuery = it
                                 triggerTmdbSearch(it)
                             },
-                            placeholder = { Text("Search movie name (e.g. Inception, Avatar, Dune)...", fontSize = 13.sp) },
+                            placeholder = { Text("Search movie title metadata...", fontSize = 13.sp) },
                             singleLine = true,
                             leadingIcon = {
                                 if (isSearching) {
@@ -455,7 +456,7 @@ fun AdminUploadMovieDialog(
                     OutlinedTextField(
                         value = title,
                         onValueChange = { title = it },
-                        placeholder = { Text("e.g. Inception") },
+                        placeholder = { Text("e.g. Movie Title") },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -790,6 +791,73 @@ fun AdminUploadMovieDialog(
                         colors = outlinedFieldColors()
                     )
 
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Marketing & Hero Carousel Placement Toggle Card
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { isHeroFeatured = !isHeroFeatured },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = CineSurface),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (isHeroFeatured) CineGold.copy(alpha = 0.8f) else Color(0x33FFFFFF)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isHeroFeatured) CineGold.copy(alpha = 0.2f) else Color(0x22FFFFFF)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Star,
+                                        contentDescription = null,
+                                        tint = if (isHeroFeatured) CineGold else CineTextMuted,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "Feature in Hero Carousel",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isHeroFeatured) CineGold else CineTextPrimary
+                                    )
+                                    Text(
+                                        text = "Showcase this movie on top marketing carousel",
+                                        fontSize = 11.sp,
+                                        color = CineTextMuted
+                                    )
+                                }
+                            }
+                            androidx.compose.material3.Switch(
+                                checked = isHeroFeatured,
+                                onCheckedChange = { isHeroFeatured = it },
+                                colors = androidx.compose.material3.SwitchDefaults.colors(
+                                    checkedThumbColor = Color.Black,
+                                    checkedTrackColor = CineGold,
+                                    uncheckedThumbColor = CineTextMuted,
+                                    uncheckedTrackColor = CineSurfaceElevated
+                                )
+                            )
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(20.dp))
                 }
 
@@ -869,7 +937,8 @@ fun AdminUploadMovieDialog(
                                 trailerUri = selectedTrailerUri,
                                 directVideoUrl = directVideoUrl,
                                 directPosterUrl = directPosterUrl,
-                                directTrailerUrl = directTrailerUrl
+                                directTrailerUrl = directTrailerUrl,
+                                isHeroFeatured = isHeroFeatured
                             ) { success, message ->
                                 Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                                 if (success) {

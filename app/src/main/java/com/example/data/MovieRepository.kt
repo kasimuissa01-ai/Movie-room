@@ -43,7 +43,6 @@ class MovieRepository(private val movieDao: MovieDao) {
                 } else {
                     resolver?.invoke(item.movieId)
                         ?: movieDao.getCachedMovieById(item.movieId)?.toMovie()
-                        ?: SampleMovies.getMovieById(item.movieId)
                         ?: item.toMovie()
                 }
             }
@@ -70,7 +69,6 @@ class MovieRepository(private val movieDao: MovieDao) {
             movieDao.deleteWatchlistItem(movieId)
         } else {
             val cached = movieDao.getCachedMovieById(movieId)?.toMovie()
-                ?: SampleMovies.getMovieById(movieId)
             val watchlistItem = if (cached != null) {
                 WatchlistItemEntity.fromMovie(cached)
             } else {

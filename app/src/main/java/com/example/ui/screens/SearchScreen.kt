@@ -195,41 +195,70 @@ fun SearchScreen(
                         }
                     }
 
-                    // Trending Searches
-                    item(key = "trending_header") {
-                        Text(
-                            text = "Trending Searches",
-                            color = CineTextPrimary,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-                    }
-
-                    items(SampleMovies.trendingSearches, key = { "trend_$it" }) { trend ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    onQueryChange(trend)
-                                    onSelectRecentSearch(trend)
-                                }
-                                .padding(vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.TrendingUp,
-                                contentDescription = null,
-                                tint = CineRedPrimary,
-                                modifier = Modifier.size(18.dp)
-                            )
+                    // Trending Searches if any exist
+                    if (SampleMovies.trendingSearches.isNotEmpty()) {
+                        item(key = "trending_header") {
                             Text(
-                                text = trend,
+                                text = "Trending Searches",
                                 color = CineTextPrimary,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.padding(start = 12.dp)
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(vertical = 8.dp)
                             )
+                        }
+
+                        items(SampleMovies.trendingSearches, key = { "trend_$it" }) { trend ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        onQueryChange(trend)
+                                        onSelectRecentSearch(trend)
+                                    }
+                                    .padding(vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.TrendingUp,
+                                    contentDescription = null,
+                                    tint = CineRedPrimary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = trend,
+                                    color = CineTextPrimary,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.padding(start = 12.dp)
+                                )
+                            }
+                        }
+                    } else if (recentSearches.isEmpty()) {
+                        item(key = "empty_search_hint") {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 48.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                EmptySearchIllustration(
+                                    modifier = Modifier.size(140.dp)
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Text(
+                                    text = "Search Movies in Storage",
+                                    color = CineTextPrimary,
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "Type any movie title, director, or genre to filter movies.",
+                                    color = CineTextMuted,
+                                    fontSize = 13.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
                         }
                     }
 

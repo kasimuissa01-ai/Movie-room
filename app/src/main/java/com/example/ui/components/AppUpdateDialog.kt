@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import android.content.Context
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -34,10 +35,16 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -45,6 +52,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.data.updater.AppUpdateInfo
+import com.example.data.updater.AppUpdateManager
 import com.example.data.updater.UpdateDownloadProgress
 import com.example.ui.theme.CineCardBorder
 import com.example.ui.theme.CineGold
@@ -55,6 +63,36 @@ import com.example.ui.theme.CineSurfaceElevated
 import com.example.ui.theme.CineTextMuted
 import com.example.ui.theme.CineTextPrimary
 import com.example.ui.theme.CineTextSecondary
+import kotlinx.coroutines.launch
+
+/**
+ * Reusable Compose UpdateDialog component that displays the new version number
+ * and provides a 'Download Now' button that triggers the APK download flow via AppUpdateManager.
+ */
+@Composable
+fun UpdateDialog(
+    updateInfo: AppUpdateInfo,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    context: Context = LocalContext.current
+) {
+    val coroutineScope = rememberCoroutineScope()
+    var downloadProgress by remember { mutableStateOf<UpdateDownloadProgress>(UpdateDownloadProgress.Idle) }
+
+    AppUpdateDialog(
+        updateInfo = updateInfo,
+        downloadProgress = downloadProgress,
+        onStartUpdate = {
+            coroutineScope.launch {
+                AppUpdateManager.downloadAndInstallApk(context, updateInfo) { progress ->
+                    downloadProgress = progress
+                }
+            }
+        },
+        onDismiss = onDismiss,
+        modifier = modifier
+    )
+}
 
 @Composable
 fun AppUpdateDialog(
@@ -94,7 +132,7 @@ fun AppUpdateDialog(
                     .fillMaxWidth()
                     .padding(24.dp)
             ) {
-                // Header with icon and optional close
+                // Header with icon and version number
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -133,15 +171,16 @@ fun AppUpdateDialog(
                                     Text(
                                         text = "v${updateInfo.latestVersionName}",
                                         color = CineGold,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.testTag("new_version_text")
                                     )
                                 }
                                 if (updateInfo.fileSizeFormatted.isNotBlank()) {
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
                                         text = "• ${updateInfo.fileSizeFormatted}",
-                                        fontSize = 11.sp,
+                                        fontSize = 12.sp,
                                         color = CineTextMuted
                                     )
                                 }
@@ -272,7 +311,7 @@ fun AppUpdateDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Action Buttons
+                // Action Buttons with 'Download Now'
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -285,7 +324,7 @@ fun AppUpdateDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(48.dp)
-                            .testTag("update_now_button")
+                            .testTag("download_now_button")
                     ) {
                         if (isDownloading) {
                             CircularProgressIndicator(
@@ -303,7 +342,7 @@ fun AppUpdateDialog(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = if (isReady) "Install Now" else "Update Automatically",
+                                text = if (isReady) "Install Now" else "Download Now",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 15.sp
                             )
@@ -318,6 +357,7 @@ fun AppUpdateDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(44.dp)
+                                .testTag("remind_me_later_button")
                         ) {
                             Text(
                                 text = "Remind Me Later",

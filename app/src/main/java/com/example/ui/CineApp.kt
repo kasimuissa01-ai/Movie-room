@@ -550,13 +550,13 @@ fun CineApp(
                 StandardCharsets.UTF_8.toString()
             )
             val movies = when (categoryKey) {
-                "trending" -> homeFeedState.trending
-                "popular" -> homeFeedState.popular
-                "action" -> homeFeedState.action
-                "now_playing" -> homeFeedState.nowPlaying
-                "upcoming" -> homeFeedState.upcoming
-                "uploaded" -> uploadedMovies
-                else -> SampleMovies.getMoviesForCategory(categoryKey)
+                "storage", "uploaded" -> uploadedMovies
+                else -> {
+                    uploadedMovies.filter { movie ->
+                        movie.genres.any { it.equals(categoryKey, ignoreCase = true) } ||
+                                movie.category.equals(categoryKey, ignoreCase = true)
+                    }
+                }
             }
             CategoryDetailScreen(
                 categoryTitle = categoryTitle,

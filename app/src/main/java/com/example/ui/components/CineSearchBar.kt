@@ -36,7 +36,7 @@ import com.example.ui.theme.CineTextPrimary
 fun CineSearchBar(
     query: String,
     onQueryChange: (String) -> Unit,
-    placeholder: String = "Search title, actor, or TMDB ID (e.g. 27205)...",
+    placeholder: String = "Search movies, genres, cast...",
     modifier: Modifier = Modifier,
     onClear: () -> Unit = { onQueryChange("") }
 ) {

@@ -442,8 +442,7 @@ fun ProfileScreen(
                                 permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
                             } else {
                                 coroutineScope.launch {
-                                    val movie = SampleMovies.allMovies.firstOrNull() ?: return@launch
-                                    MovieNotificationHelper.showTestNotification(context, movie)
+                                    MovieNotificationHelper.showTestNotification(context)
                                     Toast.makeText(context, "Test notification dispatched! Check your status bar.", Toast.LENGTH_LONG).show()
                                 }
                             }

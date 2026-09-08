@@ -295,17 +295,23 @@ object MovieNotificationHelper {
     /**
      * Instantly dispatches a test notification for the user to preview on their screen
      */
-    suspend fun showTestNotification(context: Context, movie: Movie) {
+    suspend fun showTestNotification(context: Context, movie: Movie? = null) {
         createNotificationChannels(context)
 
-        val title = "🎬 Daily Reminder: ${movie.title}"
-        val text = "This is what your daily movie alert looks like! Rated ★ ${movie.rating} • Ready to watch."
-        val posterBitmap = fetchBitmapFromUrl(movie.backdropUrl.ifBlank { movie.posterUrl })
+        val title = if (movie != null) "🎬 Daily Alert: ${movie.title}" else "🎬 Movie Room Daily Alert"
+        val text = if (movie != null) {
+            "Rated ★ ${movie.rating} • Ready to stream from your storage database."
+        } else {
+            "Your daily notifications are active! Check your storage catalog for new releases."
+        }
+        val posterBitmap = if (movie != null) fetchBitmapFromUrl(movie.backdropUrl.ifBlank { movie.posterUrl }) else null
 
         val playIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra(EXTRA_MOVIE_ID, movie.id)
-            putExtra(EXTRA_ACTION, ACTION_PLAY)
+            if (movie != null) {
+                putExtra(EXTRA_MOVIE_ID, movie.id)
+                putExtra(EXTRA_ACTION, ACTION_PLAY)
+            }
         }
         val playPendingIntent = PendingIntent.getActivity(
             context,
@@ -322,7 +328,7 @@ object MovieNotificationHelper {
             .setContentIntent(playPendingIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .addAction(R.drawable.ic_notification_movie, "▶ Watch Now", playPendingIntent)
+            .addAction(R.drawable.ic_notification_movie, "▶ Open App", playPendingIntent)
 
         if (posterBitmap != null) {
             builder.setStyle(

@@ -179,9 +179,8 @@ object MovieApiClient {
             }
         }
 
-        // Fallback: Check local catalog
-        SampleMovies.getMovieById(cleanId)
-            ?: SampleMovies.getMovieById(numericId)
+        // Return null if not found on backend
+        null
     }
 
     suspend fun getRecommendations(context: Context? = null, id: String): List<Movie> = withContext(Dispatchers.IO) {
@@ -209,10 +208,7 @@ object MovieApiClient {
             }
         }
 
-        // Fallback: Sample recommendations
-        SampleMovies.getRecommended(cleanId).ifEmpty {
-            SampleMovies.getRecommended(numericId)
-        }
+        emptyList()
     }
 
     // --- Authentication ---

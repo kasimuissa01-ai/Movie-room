@@ -25,7 +25,8 @@ data class UploadedMovieEntity(
     val quality: String = "4K Ultra HD",
     val contentRating: String = "PG-13",
     val uploadedAt: Long = System.currentTimeMillis(),
-    val r2StorageKey: String = ""
+    val r2StorageKey: String = "",
+    val isHeroFeatured: Boolean = true
 ) {
     fun toMovie(): Movie {
         val parsedGenres = genresString.split(",").map { it.trim() }.filter { it.isNotEmpty() }
@@ -48,7 +49,7 @@ data class UploadedMovieEntity(
             director = director,
             studio = studio,
             category = category,
-            featured = true,
+            featured = isHeroFeatured,
             trending = true,
             releaseDate = year.toString(),
             quality = quality,

@@ -171,7 +171,6 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         uploadedMovies.value.firstOrNull { it.id == id }
             ?: _dynamicMovies.value[id]
             ?: _movieDetailsMap.value[id]?.movie
-            ?: SampleMovies.getMovieById(id)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // All cached movies in Room database (available offline)
@@ -192,9 +191,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     private val _selectedGenreFilter = MutableStateFlow<String?>(null)
     val selectedGenreFilter: StateFlow<String?> = _selectedGenreFilter.asStateFlow()
 
-    private val _recentSearches = MutableStateFlow(
-        listOf("Dune: Part Two", "Oppenheimer", "Spider-Man", "Action", "Inception")
-    )
+    private val _recentSearches = MutableStateFlow<List<String>>(emptyList())
     val recentSearches: StateFlow<List<String>> = _recentSearches.asStateFlow()
 
     private val _apiSearchResults = MutableStateFlow<List<Movie>>(emptyList())
@@ -241,13 +238,6 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
             // Check for app OTA updates automatically on launch
             checkForAppUpdates(application)
-
-            // Seed SampleMovies into Room persistent cache for complete offline access
-            try {
-                repository.cacheMovies(SampleMovies.allMovies)
-            } catch (e: Exception) {
-                Log.w(TAG, "Sample movies room cache init: ${e.message}")
-            }
 
             // Fetch live feeds from Cloudflare Worker Backend
             loadHomeFeeds()
@@ -527,7 +517,6 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
             ?: watchlistMovies.value.firstOrNull { it.id == id }
             ?: cachedMovies.value.firstOrNull { it.id == id }
             ?: downloadedMovies.value.firstOrNull { it.movieId == id }?.toMovie()
-            ?: SampleMovies.getMovieById(id)
     }
 
     // Admin Authentication Methods
@@ -828,6 +817,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         directVideoUrl: String,
         directPosterUrl: String,
         directTrailerUrl: String = "",
+        isHeroFeatured: Boolean = true,
         onFinished: (Boolean, String) -> Unit
     ) {
         if (!_isAdminLoggedIn.value) {
@@ -954,6 +944,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     "runtime" to durationMinutes,
                     "genres" to genres.split(",").map { it.trim() }.filter { it.isNotBlank() },
                     "category" to category.trim().ifBlank { "Action" },
+                    "featured" to isHeroFeatured,
                     "published" to true
                 )
 
@@ -982,7 +973,8 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     studio = "Cloudflare R2 Cinema",
                     category = category.ifBlank { "Action" },
                     uploadedAt = timestamp,
-                    r2StorageKey = videoKey
+                    r2StorageKey = videoKey,
+                    isHeroFeatured = isHeroFeatured
                 )
 
                 repository.saveUploadedMovie(entity)
