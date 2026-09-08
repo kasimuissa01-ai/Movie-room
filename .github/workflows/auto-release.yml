@@ -47,12 +47,16 @@ jobs:
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
           R2_PUBLIC_URL_BASE: ${{ secrets.R2_PUBLIC_URL_BASE }}
         run: |
-          # 1. Restore or generate signing keystore
-          if [ -f "debug.keystore.base64" ]; then
-            base64 -d debug.keystore.base64 > debug.keystore 2>/dev/null || base64 --decode debug.keystore.base64 > debug.keystore || true
+          # 1. Restore production release keystore from base64 secret or fail clearly
+          if [ -n "${{ secrets.UPLOAD_KEY_BASE64 }}" ]; then
+            echo "${{ secrets.UPLOAD_KEY_BASE64 }}" | base64 -d > my-upload-key.jks
+          elif [ -f "my-upload-key.jks.base64" ]; then
+            base64 -d my-upload-key.jks.base64 > my-upload-key.jks || base64 --decode my-upload-key.jks.base64 > my-upload-key.jks
           fi
-          if [ ! -f "debug.keystore" ]; then
-            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+
+          if [ ! -f "my-upload-key.jks" ]; then
+            echo "ERROR: Production release keystore 'my-upload-key.jks' not found and UPLOAD_KEY_BASE64 secret is missing!"
+            exit 1
           fi
 
           # 2. Setup .env file with actual production secrets
