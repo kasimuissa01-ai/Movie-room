@@ -16,3 +16,9 @@
 local.properties
 .env
 debug.keystore
+
+my-upload-key.jks
+*.jks
+my-upload-key.jks.base64
+.env
+RELEASE_SECRETS_GUIDE.txt

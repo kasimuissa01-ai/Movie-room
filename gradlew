@@ -141,6 +141,10 @@ if $cygwin ; then
     done
 fi
 
+if [ ! -f "$CLASSPATH" ]; then
+    exec gradle "$@"
+fi
+
 # Escape application args
 save () {
     for i do printf %s\\n "$i" | sed "s/'/'\\\\''/g;1s/^/'/;\$s/\$/' \\\\/" ; done
