@@ -140,6 +140,9 @@ object R2Uploader {
         objectKey: String,
         contentType: String,
         folder: String = "movies",
+        movieId: String? = null,
+        isTrailer: Boolean? = null,
+        movieData: Map<String, Any?>? = null,
         onProgress: (bytesUploaded: Long, totalBytes: Long, percent: Int) -> Unit = { _, _, _ -> }
     ): UploadResult = withContext(Dispatchers.IO) {
         try {
@@ -198,6 +201,7 @@ object R2Uploader {
                     okHttpClient.newCall(putReq).execute().use { response ->
                         if (!response.isSuccessful) {
                             val errBody = response.body?.string() ?: ""
+                            Log.e(TAG, "Direct R2 single upload failed: host=${response.request.url.host}, path=${response.request.url.encodedPath}, code=${response.code}, body=$errBody")
                             return@withContext UploadResult.Failure("Direct R2 upload failed with HTTP ${response.code}: $errBody")
                         }
                     }
@@ -209,7 +213,15 @@ object R2Uploader {
                     }
                 }
 
-                val completeRes = MovieApiClient.completeR2Upload(context, targetKey, null, null)
+                val completeRes = MovieApiClient.completeR2Upload(
+                    context = context,
+                    key = targetKey,
+                    uploadId = null,
+                    parts = null,
+                    movieId = movieId,
+                    isTrailer = isTrailer,
+                    movieData = movieData
+                )
                 return@withContext if (completeRes.isSuccess) {
                     UploadResult.Success(targetKey, publicUrl)
                 } else {
@@ -279,7 +291,9 @@ object R2Uploader {
                                         lastPartError = "Empty ETag header from R2"
                                     }
                                 } else {
-                                    lastPartError = "HTTP ${resp.code}: ${resp.body?.string() ?: ""}"
+                                    val errBody = resp.body?.string() ?: ""
+                                    Log.e(TAG, "R2 part $partNum PUT failed: host=${resp.request.url.host}, path=${resp.request.url.encodedPath}, code=${resp.code}, body=$errBody")
+                                    lastPartError = "HTTP ${resp.code}: $errBody"
                                 }
                             }
                         } catch (e: Exception) {
@@ -303,7 +317,15 @@ object R2Uploader {
             }
 
             Log.d(TAG, "Completing multipart upload with ${completedParts.size} parts")
-            val completeRes = MovieApiClient.completeR2Upload(context, targetKey, uploadId, completedParts)
+            val completeRes = MovieApiClient.completeR2Upload(
+                context = context,
+                key = targetKey,
+                uploadId = uploadId,
+                parts = completedParts,
+                movieId = movieId,
+                isTrailer = isTrailer,
+                movieData = movieData
+            )
 
             return@withContext completeRes.fold(
                 onSuccess = { res ->

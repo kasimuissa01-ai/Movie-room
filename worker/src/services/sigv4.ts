@@ -10,6 +10,10 @@ export interface SigV4Options {
   queryParams?: Record<string, string>;
 }
 
+function encodeRfc3986(str: string): string {
+  return encodeURIComponent(str).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+}
+
 /**
  * Generates an AWS SigV4 presigned URL using standard Web Crypto API natively available in Cloudflare Workers.
  */
@@ -35,13 +39,13 @@ export async function generatePresignedUrl(options: SigV4Options): Promise<strin
 
   const sortedKeys = Object.keys(params).sort();
   const canonicalQueryString = sortedKeys
-    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`)
+    .map(k => `${encodeRfc3986(k)}=${encodeRfc3986(params[k])}`)
     .join('&');
 
   const cleanKey = options.key.replace(/^\/+/, '');
-  const canonicalPath = `/${options.bucket}/${cleanKey.split('/').map(segment => encodeURIComponent(segment)).join('/')}`;
+  const canonicalPath = `/${options.bucket}/${cleanKey.split('/').map(segment => encodeRfc3986(segment)).join('/')}`;
 
-  const canonicalHeaders = `host:${host}\n`;
+  const canonicalHeaders = `host:${host}`;
   const signedHeaders = 'host';
   const payloadHash = 'UNSIGNED-PAYLOAD';
 

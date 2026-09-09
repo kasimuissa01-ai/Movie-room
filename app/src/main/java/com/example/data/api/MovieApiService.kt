@@ -193,7 +193,10 @@ data class CompletePartDto(
 data class CompleteUploadRequest(
     val key: String,
     val uploadId: String? = null,
-    val parts: List<CompletePartDto>? = null
+    val parts: List<CompletePartDto>? = null,
+    val movieId: String? = null,
+    val isTrailer: Boolean? = null,
+    val movieData: Map<String, Any?>? = null
 )
 
 data class CompleteUploadResponse(

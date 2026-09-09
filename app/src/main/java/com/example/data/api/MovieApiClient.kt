@@ -413,12 +413,15 @@ object MovieApiClient {
         context: Context,
         key: String,
         uploadId: String?,
-        parts: List<CompletePartDto>?
+        parts: List<CompletePartDto>?,
+        movieId: String? = null,
+        isTrailer: Boolean? = null,
+        movieData: Map<String, Any?>? = null
     ): Result<CompleteUploadResponse> = withContext(Dispatchers.IO) {
         val token = BackendConfig.getAuthToken(context)
         val authHeader = if (!token.isNullOrBlank()) "Bearer $token" else ""
         try {
-            val req = CompleteUploadRequest(key, uploadId, parts)
+            val req = CompleteUploadRequest(key, uploadId, parts, movieId, isTrailer, movieData)
             val res = getService(context).adminCompleteUpload(authHeader, req)
             if (res.success) {
                 Result.success(res)

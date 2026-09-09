@@ -341,11 +341,54 @@ export async function handleAdminUploadComplete(request: Request, env: Env): Pro
       }
     }
 
+    // Final confirmation step: update / finalize object record in Firestore if movieId or movieData supplied
+    const movieId = body.movieId ? String(body.movieId).trim() : null;
+    const movieData = body.movieData || null;
+    const isTrailer = body.isTrailer === true;
+    let firestoreUpdated = false;
+
+    if (movieId || movieData) {
+      try {
+        const firestore = new FirestoreService(env);
+        const targetId = movieId || (movieData && movieData.id);
+        if (targetId) {
+          const existing = await firestore.getMovieById(targetId);
+          let payloadToSave: any = existing ? { ...existing } : (movieData || {});
+          
+          payloadToSave.id = targetId;
+          if (isTrailer) {
+            payloadToSave.trailerKey = key;
+            payloadToSave.trailer_key = key;
+          } else {
+            payloadToSave.videoKey = key;
+            payloadToSave.video_key = key;
+          }
+
+          if (movieData) {
+            payloadToSave = { ...payloadToSave, ...movieData };
+            if (isTrailer) {
+              payloadToSave.trailerKey = key;
+              payloadToSave.trailer_key = key;
+            } else {
+              payloadToSave.videoKey = key;
+              payloadToSave.video_key = key;
+            }
+          }
+
+          firestoreUpdated = await firestore.saveMovie(targetId, payloadToSave);
+          console.log(`[Diagnostic] Firestore finalized movie ${targetId} with R2 key '${key}': success=${firestoreUpdated}`);
+        }
+      } catch (fsErr: any) {
+        console.error('[Diagnostic] Error updating Firestore in complete upload:', fsErr);
+      }
+    }
+
     return createJsonResponse({
       success: true,
       message: 'Direct upload finalized and verified successfully.',
       key,
-      url: publicUrl
+      url: publicUrl,
+      firestoreUpdated
     });
   } catch (e: any) {
     console.error('Complete upload error:', e);
