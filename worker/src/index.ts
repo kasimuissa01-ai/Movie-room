@@ -26,7 +26,10 @@ import {
   handleAdminCreateMovie,
   handleAdminPublishMovie,
   handleAdminDeleteMovie,
-  handleAdminR2Upload
+  handleAdminR2Upload,
+  handleAdminUploadInitiate,
+  handleAdminUploadSignPart,
+  handleAdminUploadComplete
 } from './routes/admin';
 import {
   handleGetLatestUpdate,
@@ -157,6 +160,15 @@ export default {
       }
       if (path === '/api/admin/r2/upload' && method === 'POST') {
         return await handleAdminR2Upload(request, env);
+      }
+      if (path === '/api/admin/uploads/initiate' && method === 'POST') {
+        return await handleAdminUploadInitiate(request, env);
+      }
+      if (path === '/api/admin/uploads/sign-part' && method === 'POST') {
+        return await handleAdminUploadSignPart(request, env);
+      }
+      if (path === '/api/admin/uploads/complete' && method === 'POST') {
+        return await handleAdminUploadComplete(request, env);
       }
 
       // 7. App Update Endpoints

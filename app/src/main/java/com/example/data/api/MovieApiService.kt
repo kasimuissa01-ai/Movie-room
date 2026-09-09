@@ -129,4 +129,77 @@ interface MovieApiService {
         @Header("Content-Type") contentType: String,
         @Body fileBody: RequestBody
     ): R2UploadResponse
+
+    @POST("api/admin/uploads/initiate")
+    suspend fun adminInitiateUpload(
+        @Header("Authorization") authHeader: String,
+        @Body request: InitiateUploadRequest
+    ): InitiateUploadResponse
+
+    @POST("api/admin/uploads/sign-part")
+    suspend fun adminSignPart(
+        @Header("Authorization") authHeader: String,
+        @Body request: SignPartRequest
+    ): SignPartResponse
+
+    @POST("api/admin/uploads/complete")
+    suspend fun adminCompleteUpload(
+        @Header("Authorization") authHeader: String,
+        @Body request: CompleteUploadRequest
+    ): CompleteUploadResponse
 }
+
+data class InitiateUploadRequest(
+    val filename: String,
+    val folder: String,
+    val fileSize: Long,
+    val contentType: String,
+    val mode: String? = null
+)
+
+data class InitiateUploadResponse(
+    val success: Boolean,
+    val mode: String? = null,
+    val key: String? = null,
+    val uploadUrl: String? = null,
+    val uploadId: String? = null,
+    val partSize: Long = 16777216L,
+    val totalParts: Int = 1,
+    val publicUrl: String? = null,
+    val message: String? = null,
+    val error: String? = null
+)
+
+data class SignPartRequest(
+    val key: String,
+    val uploadId: String,
+    val partNumber: Int
+)
+
+data class SignPartResponse(
+    val success: Boolean = true,
+    val key: String? = null,
+    val uploadId: String? = null,
+    val partNumber: Int = 1,
+    val uploadUrl: String? = null,
+    val error: String? = null
+)
+
+data class CompletePartDto(
+    val partNumber: Int,
+    val etag: String
+)
+
+data class CompleteUploadRequest(
+    val key: String,
+    val uploadId: String? = null,
+    val parts: List<CompletePartDto>? = null
+)
+
+data class CompleteUploadResponse(
+    val success: Boolean,
+    val key: String? = null,
+    val url: String? = null,
+    val message: String? = null,
+    val error: String? = null
+)

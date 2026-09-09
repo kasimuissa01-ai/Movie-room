@@ -283,14 +283,25 @@ object MovieApiClient {
                 fileBody = requestBody
             )
 
+            Log.d(TAG, "[Diagnostic] Worker upload HTTP response: success=${res.success}, key=${res.key}, url=${res.url}")
+
             if (res.success) {
                 Result.success(res)
             } else {
-                Result.failure(Exception(res.error ?: res.message ?: "Upload failed"))
+                val errMsg = res.error ?: res.message ?: "Upload failed"
+                Log.e(TAG, "[Diagnostic] Worker returned failure response: $errMsg")
+                Result.failure(Exception(errMsg))
             }
+        } catch (e: retrofit2.HttpException) {
+            val code = e.code()
+            val errorBody = e.response()?.errorBody()?.string() ?: ""
+            Log.e(TAG, "[Diagnostic] HTTP $code error during upload: ${e.message()}. Body: $errorBody", e)
+            Result.failure(Exception("HTTP $code Upload Error: ${e.message()} - $errorBody"))
         } catch (e: Exception) {
-            Log.e(TAG, "R2 streaming upload error: ${e.message}", e)
-            Result.failure(Exception("Unable to upload media to server: ${e.message}"))
+            val exType = e.javaClass.simpleName
+            val exMsg = e.localizedMessage ?: e.message ?: "Unknown I/O error"
+            Log.e(TAG, "[Diagnostic] Upload exception ($exType): $exMsg", e)
+            Result.failure(Exception("Upload Error ($exType): $exMsg"))
         }
     }
 
@@ -349,6 +360,70 @@ object MovieApiClient {
                 Result.success(true)
             } else {
                 Result.failure(Exception(res.error ?: "Failed to publish movie"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun initiateR2Upload(
+        context: Context,
+        filename: String,
+        fileSize: Long,
+        contentType: String,
+        folder: String = "movies"
+    ): Result<InitiateUploadResponse> = withContext(Dispatchers.IO) {
+        val token = BackendConfig.getAuthToken(context)
+        val authHeader = if (!token.isNullOrBlank()) "Bearer $token" else ""
+        try {
+            val req = InitiateUploadRequest(filename, folder, fileSize, contentType)
+            val res = getService(context).adminInitiateUpload(authHeader, req)
+            if (res.success) {
+                Result.success(res)
+            } else {
+                Result.failure(Exception(res.error ?: res.message ?: "Failed to initiate upload"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun getSignPartUrl(
+        context: Context,
+        key: String,
+        uploadId: String,
+        partNumber: Int
+    ): Result<SignPartResponse> = withContext(Dispatchers.IO) {
+        val token = BackendConfig.getAuthToken(context)
+        val authHeader = if (!token.isNullOrBlank()) "Bearer $token" else ""
+        try {
+            val req = SignPartRequest(key, uploadId, partNumber)
+            val res = getService(context).adminSignPart(authHeader, req)
+            if (res.success && !res.uploadUrl.isNullOrBlank()) {
+                Result.success(res)
+            } else {
+                Result.failure(Exception(res.error ?: "Failed to sign part $partNumber"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun completeR2Upload(
+        context: Context,
+        key: String,
+        uploadId: String?,
+        parts: List<CompletePartDto>?
+    ): Result<CompleteUploadResponse> = withContext(Dispatchers.IO) {
+        val token = BackendConfig.getAuthToken(context)
+        val authHeader = if (!token.isNullOrBlank()) "Bearer $token" else ""
+        try {
+            val req = CompleteUploadRequest(key, uploadId, parts)
+            val res = getService(context).adminCompleteUpload(authHeader, req)
+            if (res.success) {
+                Result.success(res)
+            } else {
+                Result.failure(Exception(res.error ?: res.message ?: "Failed to complete upload"))
             }
         } catch (e: Exception) {
             Result.failure(e)

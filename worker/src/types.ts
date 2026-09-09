@@ -8,14 +8,19 @@ export interface Env {
   API_VERSION?: string;
   CORS_ORIGIN?: string;
 
-  // Secrets (Injected via Cloudflare Worker Secrets)
+  // Secrets & Configs
   TMDB_API_KEY: string;
   JWT_SECRET: string;
   ADMIN_API_KEY?: string;
   DATABASE_URL?: string;
   DATABASE_SERVICE_KEY?: string;
+  R2_ACCOUNT_ID?: string;
+  R2_ACCESS_KEY_ID?: string;
+  R2_SECRET_ACCESS_KEY?: string;
   R2_ACCESS_KEY?: string;
   R2_SECRET_KEY?: string;
+  R2_BUCKET_NAME?: string;
+  R2_PUBLIC_DOMAIN?: string;
 }
 
 export interface UserPayload {

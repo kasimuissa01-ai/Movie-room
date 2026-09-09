@@ -19,6 +19,9 @@ preview_bucket_name = "stories"
 ENVIRONMENT = "production"
 API_VERSION = "v1"
 CORS_ORIGIN = "*"
+R2_ACCOUNT_ID = "693099206806"
+R2_BUCKET_NAME = "stories"
+R2_PUBLIC_DOMAIN = "pub-cinestream.r2.dev"
 
 # SECRETS (Set via `wrangler secret put <KEY_NAME>` or Cloudflare Dashboard):
 # - TMDB_API_KEY
