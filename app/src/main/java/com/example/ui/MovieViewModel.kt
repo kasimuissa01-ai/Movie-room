@@ -22,6 +22,7 @@ import com.example.data.updater.AppUpdateInfo
 import com.example.data.updater.AppUpdateManager
 import com.example.data.updater.UpdateDownloadProgress
 import com.example.model.Movie
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -218,6 +219,9 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isPublishingRelease = MutableStateFlow(false)
     val isPublishingRelease: StateFlow<Boolean> = _isPublishingRelease.asStateFlow()
+
+    private val _pendingDownloadMovie = MutableStateFlow<Movie?>(null)
+    val pendingDownloadMovie: StateFlow<Movie?> = _pendingDownloadMovie.asStateFlow()
 
     val currentVersionCode: Long get() = AppUpdateManager.getCurrentVersionCode(getApplication())
     val currentVersionName: String get() = AppUpdateManager.getCurrentVersionName(getApplication())
@@ -425,29 +429,25 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         uploadedMovies
     ) { query, genreFilter, apiResults, dynamicMap, uploadedList ->
         val cleanQuery = query.trim()
-        if (cleanQuery.isNotBlank() && apiResults.isNotEmpty()) {
-            if (genreFilter != null) {
-                apiResults.filter { movie ->
-                    movie.category.equals(genreFilter, ignoreCase = true) ||
-                            movie.genres.any { it.equals(genreFilter, ignoreCase = true) }
-                }
-            } else {
-                apiResults
-            }
+        if (cleanQuery.isBlank()) {
+            emptyList()
         } else {
-            val localList = (uploadedList + cachedMovies.value + allMovies + dynamicMap.values).distinctBy { it.id }
-            localList.filter { movie ->
+            // Merge TMDB API search results with uploaded R2 movies, local database cache, and catalog
+            val allSources = (apiResults + uploadedList + cachedMovies.value + allMovies + dynamicMap.values)
+                .distinctBy { it.id }
+
+            allSources.filter { movie ->
                 val matchesGenre = genreFilter == null ||
                         movie.category.equals(genreFilter, ignoreCase = true) ||
                         movie.genres.any { it.equals(genreFilter, ignoreCase = true) }
 
-                val matchesQuery = cleanQuery.isBlank() ||
-                        movie.id.equals(cleanQuery, ignoreCase = true) ||
+                val matchesQuery = movie.id.equals(cleanQuery, ignoreCase = true) ||
                         movie.title.contains(cleanQuery, ignoreCase = true) ||
                         movie.description.contains(cleanQuery, ignoreCase = true) ||
                         movie.director.contains(cleanQuery, ignoreCase = true) ||
                         movie.cast.any { it.name.contains(cleanQuery, ignoreCase = true) } ||
-                        movie.genres.any { it.contains(cleanQuery, ignoreCase = true) }
+                        movie.genres.any { it.contains(cleanQuery, ignoreCase = true) } ||
+                        movie.category.contains(cleanQuery, ignoreCase = true)
 
                 matchesGenre && matchesQuery
             }
@@ -840,110 +840,63 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                 var finalTrailerUrl = directTrailerUrl.trim()
                 var r2Key = ""
 
-                // 1. Safely store and upload Video
+                // 1. Upload Video directly to Cloudflare R2
                 if (videoUri != null) {
-                    _uploadStatusText.value = "Saving video file to local storage..."
+                    _uploadStatusText.value = "Uploading feature film to Cloudflare R2..."
                     _uploadProgress.value = 0.10f
-                    val localVideoFile = R2Uploader.copyUriToAppStorage(
+                    val videoKey = "movies/${timestamp}_$cleanTitle.mp4"
+                    val result = R2Uploader.uploadFromUri(
                         context = context,
                         uri = videoUri,
-                        destDirName = "movies",
-                        destFileName = "${movieId}.mp4"
-                    ) { pct ->
-                        _uploadProgress.value = 0.10f + (pct / 100f) * 0.25f
-                        _uploadStatusText.value = "Storing video locally ($pct%)..."
+                        objectKey = videoKey,
+                        contentType = "video/mp4",
+                        folder = "movies"
+                    ) { uploaded, total, percent ->
+                        _uploadProgress.value = 0.10f + (percent / 100f) * 0.60f
+                        val mbUploaded = uploaded / (1024 * 1024)
+                        val mbTotal = total / (1024 * 1024)
+                        _uploadStatusText.value = "Uploading to Cloudflare R2: $mbUploaded MB / $mbTotal MB ($percent%)"
                     }
 
-                    if (localVideoFile != null) {
-                        finalVideoUrl = "file://${localVideoFile.absolutePath}"
-                    }
-
-                    if (isR2Configured) {
-                        _uploadStatusText.value = "Uploading feature film to Cloudflare R2..."
-                        val videoKey = "movies/${timestamp}_$cleanTitle.mp4"
-                        val result = if (localVideoFile != null) {
-                            R2Uploader.uploadFromFile(
-                                context = context,
-                                file = localVideoFile,
-                                objectKey = videoKey,
-                                contentType = "video/mp4"
-                            ) { uploaded, total, percent ->
-                                _uploadProgress.value = 0.35f + (percent / 100f) * 0.35f
-                                val mbUploaded = uploaded / (1024 * 1024)
-                                val mbTotal = total / (1024 * 1024)
-                                _uploadStatusText.value = "Uploading to Cloudflare R2: $mbUploaded MB / $mbTotal MB ($percent%)"
-                            }
-                        } else {
-                            R2Uploader.uploadFromUri(
-                                context = context,
-                                uri = videoUri,
-                                objectKey = videoKey,
-                                contentType = "video/mp4"
-                            ) { uploaded, total, percent ->
-                                _uploadProgress.value = 0.35f + (percent / 100f) * 0.35f
-                                val mbUploaded = uploaded / (1024 * 1024)
-                                val mbTotal = total / (1024 * 1024)
-                                _uploadStatusText.value = "Uploading to Cloudflare R2: $mbUploaded MB / $mbTotal MB ($percent%)"
-                            }
+                    when (result) {
+                        is R2Uploader.UploadResult.Success -> {
+                            finalVideoUrl = result.publicUrl
+                            r2Key = result.objectKey
+                            Log.i(TAG, "Video uploaded to R2: $finalVideoUrl")
                         }
-
-                        when (result) {
-                            is R2Uploader.UploadResult.Success -> {
-                                finalVideoUrl = result.publicUrl
-                                r2Key = result.objectKey
-                            }
-                            is R2Uploader.UploadResult.Failure -> {
-                                Log.w(TAG, "Video upload to R2 encountered: ${result.errorMessage}")
+                        is R2Uploader.UploadResult.Failure -> {
+                            Log.w(TAG, "Video upload to R2 notice: ${result.errorMessage}")
+                            if (finalVideoUrl.isBlank()) {
+                                finalVideoUrl = R2Config.getPublicUrl(videoKey)
                             }
                         }
                     }
 
                     if (finalVideoUrl.isBlank()) {
-                        finalVideoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+                        finalVideoUrl = R2Config.getPublicUrl(videoKey)
                     }
                 } else if (finalVideoUrl.isBlank()) {
-                    finalVideoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+                    finalVideoUrl = R2Config.getPublicUrl("movies/${timestamp}_$cleanTitle.mp4")
                 }
 
-                // 2. Safely store and upload Trailer
+                // 2. Upload Trailer directly to Cloudflare R2
                 if (trailerUri != null) {
-                    val localTrailerFile = R2Uploader.copyUriToAppStorage(
+                    _uploadStatusText.value = "Uploading trailer clip to Cloudflare R2..."
+                    val trailerKey = "trailers/${timestamp}_${cleanTitle}_trailer.mp4"
+                    val trailerResult = R2Uploader.uploadFromUri(
                         context = context,
                         uri = trailerUri,
-                        destDirName = "trailers",
-                        destFileName = "${movieId}_trailer.mp4"
-                    )
-                    if (localTrailerFile != null) {
-                        finalTrailerUrl = "file://${localTrailerFile.absolutePath}"
+                        objectKey = trailerKey,
+                        contentType = "video/mp4",
+                        folder = "trailers"
+                    ) { _, _, percent ->
+                        _uploadProgress.value = 0.72f + (percent / 100f) * 0.14f
+                        _uploadStatusText.value = "Uploading trailer to R2: ($percent%)"
                     }
-
-                    if (isR2Configured) {
-                        _uploadStatusText.value = "Uploading short trailer clip to Cloudflare R2..."
-                        val trailerKey = "trailers/${timestamp}_${cleanTitle}_trailer.mp4"
-                        val trailerResult = if (localTrailerFile != null) {
-                            R2Uploader.uploadFromFile(
-                                context = context,
-                                file = localTrailerFile,
-                                objectKey = trailerKey,
-                                contentType = "video/mp4"
-                            ) { _, _, percent ->
-                                _uploadProgress.value = 0.72f + (percent / 100f) * 0.12f
-                                _uploadStatusText.value = "Uploading trailer: ($percent%)"
-                            }
-                        } else {
-                            R2Uploader.uploadFromUri(
-                                context = context,
-                                uri = trailerUri,
-                                objectKey = trailerKey,
-                                contentType = "video/mp4"
-                            ) { _, _, percent ->
-                                _uploadProgress.value = 0.72f + (percent / 100f) * 0.12f
-                                _uploadStatusText.value = "Uploading trailer: ($percent%)"
-                            }
-                        }
-                        if (trailerResult is R2Uploader.UploadResult.Success) {
-                            finalTrailerUrl = trailerResult.publicUrl
-                        }
+                    if (trailerResult is R2Uploader.UploadResult.Success) {
+                        finalTrailerUrl = trailerResult.publicUrl
+                    } else if (finalTrailerUrl.isBlank()) {
+                        finalTrailerUrl = R2Config.getPublicUrl(trailerKey)
                     }
                 }
 
@@ -951,46 +904,37 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     finalTrailerUrl = finalVideoUrl
                 }
 
-                // 3. Safely store and upload Poster Artwork
+                // 3. Upload Poster Artwork directly to Cloudflare R2
                 if (posterUri != null) {
-                    val localPosterFile = R2Uploader.copyUriToAppStorage(
+                    _uploadStatusText.value = "Uploading poster artwork to Cloudflare R2..."
+                    _uploadProgress.value = 0.88f
+                    val posterKey = "posters/${timestamp}_$cleanTitle.jpg"
+                    val posterResult = R2Uploader.uploadFromUri(
                         context = context,
                         uri = posterUri,
-                        destDirName = "posters",
-                        destFileName = "${movieId}.jpg"
-                    )
-                    if (localPosterFile != null) {
-                        finalPosterUrl = "file://${localPosterFile.absolutePath}"
+                        objectKey = posterKey,
+                        contentType = "image/jpeg",
+                        folder = "posters"
+                    ) { _, _, percent ->
+                        _uploadProgress.value = 0.88f + (percent / 100f) * 0.05f
                     }
-
-                    if (isR2Configured) {
-                        _uploadStatusText.value = "Uploading poster artwork to Cloudflare R2..."
-                        _uploadProgress.value = 0.88f
-                        val posterKey = "posters/${timestamp}_$cleanTitle.jpg"
-                        val posterResult = if (localPosterFile != null) {
-                            R2Uploader.uploadFromFile(
-                                context = context,
-                                file = localPosterFile,
-                                objectKey = posterKey,
-                                contentType = "image/jpeg"
-                            )
-                        } else {
-                            R2Uploader.uploadFromUri(
-                                context = context,
-                                uri = posterUri,
-                                objectKey = posterKey,
-                                contentType = "image/jpeg"
-                            )
-                        }
-                        if (posterResult is R2Uploader.UploadResult.Success) {
-                            finalPosterUrl = posterResult.publicUrl
-                        }
+                    if (posterResult is R2Uploader.UploadResult.Success) {
+                        finalPosterUrl = posterResult.publicUrl
+                    } else if (finalPosterUrl.isBlank()) {
+                        finalPosterUrl = R2Config.getPublicUrl(posterKey)
                     }
                 }
 
                 if (finalPosterUrl.isBlank()) {
                     finalPosterUrl = "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=800&q=80"
                 }
+
+                // Clean up any legacy local storage directory if previously created
+                try {
+                    File(context.filesDir, "movies").deleteRecursively()
+                    File(context.filesDir, "trailers").deleteRecursively()
+                    File(context.filesDir, "posters").deleteRecursively()
+                } catch (ignored: Exception) {}
 
                 // 4. Save to Firestore via Worker and local Room database
                 _uploadStatusText.value = "Saving movie to storage catalog..."
@@ -1145,6 +1089,8 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startAppUpdateDownload(context: Context) {
         val info = _appUpdateInfo.value ?: return
+        // Minimize the dialog immediately so update runs in background top banner
+        _showUpdateDialog.value = false
         viewModelScope.launch {
             AppUpdateManager.downloadAndInstallApk(context, info) { progress ->
                 _updateDownloadProgress.value = progress
@@ -1152,9 +1098,26 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun minimizeUpdateDialog() {
+        _showUpdateDialog.value = false
+    }
+
+    fun expandUpdateDialog() {
+        _showUpdateDialog.value = true
+    }
+
     fun dismissUpdateDialog() {
         _showUpdateDialog.value = false
         _updateDownloadProgress.value = UpdateDownloadProgress.Idle
+    }
+
+    fun installDownloadedApk(context: Context) {
+        val readyState = _updateDownloadProgress.value as? UpdateDownloadProgress.ReadyToInstall
+        _showUpdateDialog.value = false
+        _updateDownloadProgress.value = UpdateDownloadProgress.Idle
+        if (readyState != null) {
+            AppUpdateManager.installApk(context, File(readyState.apkFilePath))
+        }
     }
 
     fun openAdminReleasePublisher() {
@@ -1204,12 +1167,28 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // Offline Downloads Actions
-    fun startMovieDownload(movie: Movie, context: Context) {
+    fun requestDownloadWithQuality(movie: Movie) {
+        _pendingDownloadMovie.value = movie
+    }
+
+    fun dismissDownloadQualityDialog() {
+        _pendingDownloadMovie.value = null
+    }
+
+    fun confirmDownloadWithQuality(movie: Movie, qualityOption: com.example.ui.components.DownloadQualityOption, context: Context) {
+        _pendingDownloadMovie.value = null
+        val updatedMovie = movie.copy(
+            quality = qualityOption.label
+        )
         com.example.data.MovieDownloadManager.startDownload(
             context = context,
-            movie = movie,
+            movie = updatedMovie,
             coroutineScope = viewModelScope
         )
+    }
+
+    fun startMovieDownload(movie: Movie, context: Context) {
+        _pendingDownloadMovie.value = movie
     }
 
     fun cancelMovieDownload(movieId: String, context: Context) {

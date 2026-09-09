@@ -22,6 +22,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -36,6 +37,8 @@ import com.example.ui.components.AdminLoginDialog
 import com.example.ui.components.AdminReleasePublisherDialog
 import com.example.ui.components.AdminUploadMovieDialog
 import com.example.ui.components.AppUpdateDialog
+import com.example.ui.components.BackgroundUpdateBanner
+import com.example.ui.components.DownloadQualityDialog
 import com.example.ui.navigation.CineBottomBar
 import com.example.ui.navigation.CineNavTab
 import com.example.ui.screens.CategoryDetailScreen
@@ -85,6 +88,7 @@ fun CineApp(
     // Offline Downloads State
     val downloadedMovies by viewModel.downloadedMovies.collectAsState()
     val downloadProgressMap by viewModel.downloadProgressMap.collectAsState()
+    val pendingDownloadMovie by viewModel.pendingDownloadMovie.collectAsState()
 
     // Network & Room Offline Cache State
     val isOnline by viewModel.isOnline.collectAsState()
@@ -334,11 +338,56 @@ fun CineApp(
                         )
                     }
 
+                    // Download Resolution & Data Saver Quality Dialog
+                    if (pendingDownloadMovie != null) {
+                        DownloadQualityDialog(
+                            movie = pendingDownloadMovie!!,
+                            onStartDownload = { qualityOption ->
+                                viewModel.confirmDownloadWithQuality(
+                                    movie = pendingDownloadMovie!!,
+                                    qualityOption = qualityOption,
+                                    context = context
+                                )
+                                coroutineScope.launch {
+                                    val result = snackbarHostState.showSnackbar(
+                                        message = "Started download for \"${pendingDownloadMovie!!.title}\" (${qualityOption.label} • ~${qualityOption.estimatedSizeMb} MB)",
+                                        actionLabel = "View",
+                                        duration = SnackbarDuration.Short
+                                    )
+                                    if (result == SnackbarResult.ActionPerformed) {
+                                        currentTab = CineNavTab.DOWNLOADS
+                                    }
+                                }
+                            },
+                            onDismiss = {
+                                viewModel.dismissDownloadQualityDialog()
+                            }
+                        )
+                    }
+
                     // Admin Cloudflare R2 Upload Movie Dialog
                     if (showAdminUploadDialog) {
                         AdminUploadMovieDialog(
                             viewModel = viewModel,
                             onDismiss = { showAdminUploadDialog = false }
+                        )
+                    }
+
+                    // Floating top banner when update is minimized or ready
+                    if (!showUpdateDialog && appUpdateInfo != null) {
+                        BackgroundUpdateBanner(
+                            updateInfo = appUpdateInfo!!,
+                            downloadProgress = updateDownloadProgress,
+                            onExpand = {
+                                viewModel.expandUpdateDialog()
+                            },
+                            onInstall = {
+                                viewModel.installDownloadedApk(context)
+                            },
+                            onDismiss = {
+                                viewModel.dismissUpdateDialog()
+                            },
+                            modifier = Modifier.align(Alignment.TopCenter)
                         )
                     }
 
@@ -349,6 +398,12 @@ fun CineApp(
                             downloadProgress = updateDownloadProgress,
                             onStartUpdate = {
                                 viewModel.startAppUpdateDownload(context)
+                            },
+                            onInstallApk = {
+                                viewModel.installDownloadedApk(context)
+                            },
+                            onMinimize = {
+                                viewModel.minimizeUpdateDialog()
                             },
                             onDismiss = {
                                 viewModel.dismissUpdateDialog()

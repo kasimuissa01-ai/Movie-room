@@ -138,7 +138,7 @@ object AppUpdateManager {
                     val fileSize = json.optString("fileSizeFormatted", "45 MB")
                     val force = json.optBoolean("forceUpdate", false)
 
-                    val isAvailable = latestCode > currentCode
+                    val isAvailable = (latestCode > currentCode || isVersionNameNewer(latestName, currentName)) && downloadUrl.isNotBlank()
 
                     return AppUpdateInfo(
                         latestVersionCode = latestCode,

@@ -81,86 +81,6 @@ object R2Uploader {
     }
 
     /**
-     * Memory-safe streaming RequestBody for local Files.
-     */
-    class FileStreamingRequestBody(
-        private val file: File,
-        private val contentTypeStr: String,
-        private val onProgress: (bytesUploaded: Long, totalBytes: Long, percent: Int) -> Unit = { _, _, _ -> }
-    ) : RequestBody() {
-        override fun contentType(): MediaType? = contentTypeStr.toMediaTypeOrNull()
-
-        override fun contentLength(): Long = file.length()
-
-        override fun writeTo(sink: BufferedSink) {
-            val total = file.length()
-            file.inputStream().use { input ->
-                val buffer = ByteArray(64 * 1024)
-                var uploaded = 0L
-                var read: Int
-                while (input.read(buffer).also { read = it } != -1) {
-                    sink.write(buffer, 0, read)
-                    uploaded += read
-                    val percent = if (total > 0) {
-                        ((uploaded * 100) / total).toInt().coerceIn(0, 100)
-                    } else {
-                        50
-                    }
-                    onProgress(uploaded, total, percent)
-                }
-            }
-        }
-    }
-
-    /**
-     * Safely copies an Android Uri into internal application storage in 64KB chunks.
-     * Prevents OutOfMemoryErrors and allows offline streaming directly from device storage.
-     */
-    suspend fun copyUriToAppStorage(
-        context: Context,
-        uri: Uri,
-        destDirName: String,
-        destFileName: String,
-        onProgress: ((percent: Int) -> Unit)? = null
-    ): File? = withContext(Dispatchers.IO) {
-        try {
-            val dir = File(context.filesDir, destDirName).apply { mkdirs() }
-            val targetFile = File(dir, destFileName)
-
-            val totalSize = try {
-                context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1L
-            } catch (e: Exception) {
-                -1L
-            }
-
-            context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                FileOutputStream(targetFile).use { outputStream ->
-                    val buffer = ByteArray(64 * 1024)
-                    var copied = 0L
-                    var bytesRead: Int
-                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                        outputStream.write(buffer, 0, bytesRead)
-                        copied += bytesRead
-                        if (totalSize > 0 && onProgress != null) {
-                            val percent = ((copied * 100) / totalSize).toInt().coerceIn(0, 100)
-                            onProgress(percent)
-                        }
-                    }
-                    outputStream.flush()
-                }
-            }
-            if (targetFile.exists() && targetFile.length() > 0) {
-                targetFile
-            } else {
-                null
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed copying Uri to app storage: ${e.message}", e)
-            null
-        }
-    }
-
-    /**
      * Uploads bytes securely to Cloudflare R2 via our Cloudflare Worker backend.
      */
     suspend fun uploadBytes(
@@ -199,8 +119,8 @@ object R2Uploader {
     }
 
     /**
-     * Uploads content from Android Uri to Cloudflare R2 using non-blocking stream chunks.
-     * Prevents heap exhaustion and app crashes.
+     * Uploads content directly from Android Uri to Cloudflare R2 using non-blocking stream chunks.
+     * Prevents heap exhaustion, app crashes, and avoids saving multi-GB video files onto phone disk.
      */
     suspend fun uploadFromUri(
         context: Context,
@@ -230,7 +150,9 @@ object R2Uploader {
 
             result.fold(
                 onSuccess = { res ->
-                    UploadResult.Success(res.key ?: objectKey, res.url ?: "https://pub-cinestream.r2.dev/${res.key ?: objectKey}")
+                    val publicUrl = res.url?.takeIf { it.isNotBlank() }
+                        ?: R2Config.getPublicUrl(res.key ?: objectKey)
+                    UploadResult.Success(res.key ?: objectKey, publicUrl)
                 },
                 onFailure = { err ->
                     UploadResult.Failure(err.message ?: "Upload failed", err)
@@ -238,48 +160,6 @@ object R2Uploader {
             )
         } catch (e: Exception) {
             Log.e(TAG, "Failed streaming upload for Uri: ${e.message}", e)
-            UploadResult.Failure("Failed to upload file to storage: ${e.message}", e)
-        }
-    }
-
-    /**
-     * Uploads content from local File to Cloudflare R2 using streaming chunks.
-     */
-    suspend fun uploadFromFile(
-        context: Context,
-        file: File,
-        objectKey: String,
-        contentType: String,
-        folder: String = "movies",
-        onProgress: (bytesUploaded: Long, totalBytes: Long, percent: Int) -> Unit = { _, _, _ -> }
-    ): UploadResult = withContext(Dispatchers.IO) {
-        try {
-            onProgress(0, file.length(), 5)
-            val cleanFilename = objectKey.substringAfterLast('/')
-            val streamingBody = FileStreamingRequestBody(
-                file = file,
-                contentTypeStr = contentType,
-                onProgress = onProgress
-            )
-
-            val result = MovieApiClient.uploadStreamingMediaToR2(
-                context = context,
-                filename = cleanFilename,
-                requestBody = streamingBody,
-                contentType = contentType,
-                folder = folder
-            )
-
-            result.fold(
-                onSuccess = { res ->
-                    UploadResult.Success(res.key ?: objectKey, res.url ?: "https://pub-cinestream.r2.dev/${res.key ?: objectKey}")
-                },
-                onFailure = { err ->
-                    UploadResult.Failure(err.message ?: "Upload failed", err)
-                }
-            )
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed streaming upload for File: ${e.message}", e)
             UploadResult.Failure("Failed to upload file to storage: ${e.message}", e)
         }
     }

@@ -1,6 +1,8 @@
 package com.example.data
 
+import android.app.DownloadManager
 import android.content.Context
+import android.net.Uri
 import android.os.Environment
 import android.os.StatFs
 import android.util.Log
@@ -9,6 +11,7 @@ import com.example.model.Movie
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,6 +29,9 @@ object MovieDownloadManager {
 
     // Active download jobs keyed by movieId
     private val activeJobs = ConcurrentHashMap<String, Job>()
+
+    // Active system DownloadManager request IDs keyed by movieId
+    private val activeDownloadIds = ConcurrentHashMap<String, Long>()
 
     // In-memory progress tracking (movieId -> progressPercent)
     private val _downloadProgressMap = MutableStateFlow<Map<String, Int>>(emptyMap())
@@ -47,7 +53,6 @@ object MovieDownloadManager {
             if (!nomedia.exists()) {
                 nomedia.createNewFile()
             }
-            // Also ensure internal files dir has .nomedia
             val internalNomedia = File(context.filesDir, ".nomedia")
             if (!internalNomedia.exists()) {
                 internalNomedia.createNewFile()
@@ -57,6 +62,10 @@ object MovieDownloadManager {
         }
     }
 
+    /**
+     * Starts downloading a movie from Cloudflare R2 / remote storage using Android's system DownloadManager API.
+     * Progress is tracked in real-time, saved to Room DB, and published to UI observers.
+     */
     fun startDownload(
         context: Context,
         movie: Movie,
@@ -72,7 +81,7 @@ object MovieDownloadManager {
             val downloadDir = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: context.filesDir
             if (!downloadDir.exists()) downloadDir.mkdirs()
 
-            // Guarantee private in-app storage: .nomedia ensures device gallery ignores files here
+            // Guarantee private storage: .nomedia ensures device gallery ignores files here
             try {
                 val nomedia = File(downloadDir, ".nomedia")
                 if (!nomedia.exists()) {
@@ -82,103 +91,186 @@ object MovieDownloadManager {
                 Log.w(TAG, "Could not create .nomedia: ${e.message}")
             }
 
-            // Unique filename based on movie ID
             val safeId = movie.id.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-            val targetFile = File(downloadDir, "cinestream_movie_${safeId}.mp4")
+            val fileName = "cinestream_movie_${safeId}.mp4"
+            val targetFile = File(downloadDir, fileName)
+
+            // Initial Record in Room as DOWNLOADING
+            val initialEntity = DownloadedMovieEntity(
+                movieId = movie.id,
+                title = movie.title,
+                posterUrl = movie.posterUrl,
+                backdropUrl = movie.backdropUrl,
+                localFilePath = targetFile.absolutePath,
+                remoteVideoUrl = movie.videoUrl,
+                fileSizeBytes = 0L,
+                fileSizeFormatted = "Calculating...",
+                durationFormatted = movie.durationFormatted,
+                durationMinutes = movie.durationMinutes,
+                quality = movie.quality,
+                year = movie.year,
+                genresCsv = movie.genres.joinToString(", "),
+                description = movie.description,
+                downloadStatus = "DOWNLOADING",
+                downloadProgress = 0,
+                downloadedAt = System.currentTimeMillis()
+            )
+            dao.insertDownloadedMovie(initialEntity)
+            updateProgress(movie.id, 0)
+
+            val videoUrlStr = if (movie.videoUrl.isNotBlank() && movie.videoUrl.startsWith("http")) {
+                movie.videoUrl
+            } else {
+                "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+            }
+
+            var usedSystemDownloadManager = false
 
             try {
-                // Initial Record in Room as DOWNLOADING
-                val initialEntity = DownloadedMovieEntity(
-                    movieId = movie.id,
-                    title = movie.title,
-                    posterUrl = movie.posterUrl,
-                    backdropUrl = movie.backdropUrl,
-                    localFilePath = targetFile.absolutePath,
-                    remoteVideoUrl = movie.videoUrl,
-                    fileSizeBytes = 0L,
-                    fileSizeFormatted = "Calculating...",
-                    durationFormatted = movie.durationFormatted,
-                    durationMinutes = movie.durationMinutes,
-                    quality = movie.quality,
-                    year = movie.year,
-                    genresCsv = movie.genres.joinToString(", "),
-                    description = movie.description,
-                    downloadStatus = "DOWNLOADING",
-                    downloadProgress = 0,
-                    downloadedAt = System.currentTimeMillis()
-                )
-                dao.insertDownloadedMovie(initialEntity)
-                updateProgress(movie.id, 0)
-
-                // If remote video URL is blank or sample placeholder, create a playable local container
-                val videoUrlStr = if (movie.videoUrl.isNotBlank() && movie.videoUrl.startsWith("http")) {
-                    movie.videoUrl
-                } else {
-                    // Fallback to sample MP4 video stream for simulation
-                    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
-                }
-
-                val url = URL(videoUrlStr)
-                val connection = (url.openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 15000
-                    readTimeout = 30000
-                    requestMethod = "GET"
-                    instanceFollowRedirects = true
-                }
-                connection.connect()
-
-                val totalLength = connection.contentLength.toLong()
-                var bytesRead = 0L
-
-                val inputStream: InputStream = connection.inputStream
-                val outputStream = FileOutputStream(targetFile)
-
-                val buffer = ByteArray(16 * 1024)
-                var count: Int
-                var lastReportedPercent = 0
-
-                while (inputStream.read(buffer).also { count = it } != -1) {
-                    outputStream.write(buffer, 0, count)
-                    bytesRead += count
-
-                    val currentPercent = if (totalLength > 0) {
-                        ((bytesRead * 100) / totalLength).toInt().coerceIn(0, 99)
-                    } else {
-                        ((bytesRead / (1024 * 1024)).toInt() % 100)
+                val systemDownloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+                if (systemDownloadManager != null) {
+                    val request = DownloadManager.Request(Uri.parse(videoUrlStr)).apply {
+                        setTitle("Downloading ${movie.title}")
+                        setDescription("Downloading movie from Cloudflare R2 for offline viewing")
+                        setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                        setDestinationInExternalFilesDir(context, Environment.DIRECTORY_MOVIES, fileName)
+                        setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE)
+                        setMimeType("video/mp4")
                     }
 
-                    if (currentPercent > lastReportedPercent) {
-                        lastReportedPercent = currentPercent
-                        updateProgress(movie.id, currentPercent)
-                        dao.updateDownloadProgress(movie.id, currentPercent, "DOWNLOADING")
+                    val downloadId = systemDownloadManager.enqueue(request)
+                    activeDownloadIds[movie.id] = downloadId
+                    usedSystemDownloadManager = true
+
+                    Log.i(TAG, "Enqueued DownloadManager request ID $downloadId for ${movie.title}")
+
+                    var downloading = true
+                    while (downloading) {
+                        val query = DownloadManager.Query().setFilterById(downloadId)
+                        val cursor = systemDownloadManager.query(query)
+
+                        if (cursor != null && cursor.moveToFirst()) {
+                            val bytesSoFarIdx = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+                            val totalBytesIdx = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                            val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+
+                            val bytesDownloaded = if (bytesSoFarIdx >= 0) cursor.getLong(bytesSoFarIdx) else 0L
+                            val totalBytes = if (totalBytesIdx >= 0) cursor.getLong(totalBytesIdx) else 0L
+                            val status = if (statusIdx >= 0) cursor.getInt(statusIdx) else -1
+
+                            when (status) {
+                                DownloadManager.STATUS_RUNNING, DownloadManager.STATUS_PAUSED, DownloadManager.STATUS_PENDING -> {
+                                    val percent = if (totalBytes > 0) {
+                                        ((bytesDownloaded * 100) / totalBytes).toInt().coerceIn(0, 99)
+                                    } else {
+                                        ((bytesDownloaded / (1024 * 1024)).toInt() % 100)
+                                    }
+                                    updateProgress(movie.id, percent)
+                                    dao.updateDownloadProgress(movie.id, percent, "DOWNLOADING")
+                                }
+                                DownloadManager.STATUS_SUCCESSFUL -> {
+                                    downloading = false
+                                    val finalSizeBytes = if (targetFile.exists()) targetFile.length() else bytesDownloaded
+                                    val sizeFormatted = formatFileSize(finalSizeBytes)
+
+                                    val completedEntity = initialEntity.copy(
+                                        fileSizeBytes = finalSizeBytes,
+                                        fileSizeFormatted = sizeFormatted,
+                                        downloadStatus = "COMPLETED",
+                                        downloadProgress = 100,
+                                        downloadedAt = System.currentTimeMillis()
+                                    )
+                                    dao.insertDownloadedMovie(completedEntity)
+                                    updateProgress(movie.id, 100)
+                                    Log.i(TAG, "DownloadManager completed: ${movie.title} (${sizeFormatted})")
+                                }
+                                DownloadManager.STATUS_FAILED -> {
+                                    downloading = false
+                                    Log.w(TAG, "DownloadManager status FAILED for ${movie.title}")
+                                    dao.updateDownloadProgress(movie.id, 0, "FAILED")
+                                }
+                            }
+                            cursor.close()
+                        } else {
+                            downloading = false
+                        }
+
+                        if (downloading) {
+                            delay(400)
+                        }
                     }
                 }
-
-                outputStream.flush()
-                outputStream.close()
-                inputStream.close()
-                connection.disconnect()
-
-                val finalSizeBytes = targetFile.length()
-                val sizeFormatted = formatFileSize(finalSizeBytes)
-
-                val completedEntity = initialEntity.copy(
-                    fileSizeBytes = finalSizeBytes,
-                    fileSizeFormatted = sizeFormatted,
-                    downloadStatus = "COMPLETED",
-                    downloadProgress = 100,
-                    downloadedAt = System.currentTimeMillis()
-                )
-                dao.insertDownloadedMovie(completedEntity)
-                updateProgress(movie.id, 100)
-                Log.i(TAG, "Movie download complete: ${movie.title} (${sizeFormatted})")
             } catch (e: Exception) {
-                Log.e(TAG, "Download error for ${movie.title}: ${e.message}", e)
-                dao.updateDownloadProgress(movie.id, 0, "FAILED")
-            } finally {
-                activeJobs.remove(movie.id)
-                removeProgress(movie.id)
+                Log.w(TAG, "DownloadManager API error, falling back to direct stream: ${e.message}")
+                usedSystemDownloadManager = false
             }
+
+            // Fallback direct HTTP stream if DownloadManager API was skipped or unhandled
+            if (!usedSystemDownloadManager) {
+                try {
+                    val url = URL(videoUrlStr)
+                    val connection = (url.openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 15000
+                        readTimeout = 30000
+                        requestMethod = "GET"
+                        instanceFollowRedirects = true
+                    }
+                    connection.connect()
+
+                    val totalLength = connection.contentLength.toLong()
+                    var bytesRead = 0L
+
+                    val inputStream: InputStream = connection.inputStream
+                    val outputStream = FileOutputStream(targetFile)
+
+                    val buffer = ByteArray(16 * 1024)
+                    var count: Int
+                    var lastReportedPercent = 0
+
+                    while (inputStream.read(buffer).also { count = it } != -1) {
+                        outputStream.write(buffer, 0, count)
+                        bytesRead += count
+
+                        val currentPercent = if (totalLength > 0) {
+                            ((bytesRead * 100) / totalLength).toInt().coerceIn(0, 99)
+                        } else {
+                            ((bytesRead / (1024 * 1024)).toInt() % 100)
+                        }
+
+                        if (currentPercent > lastReportedPercent) {
+                            lastReportedPercent = currentPercent
+                            updateProgress(movie.id, currentPercent)
+                            dao.updateDownloadProgress(movie.id, currentPercent, "DOWNLOADING")
+                        }
+                    }
+
+                    outputStream.flush()
+                    outputStream.close()
+                    inputStream.close()
+                    connection.disconnect()
+
+                    val finalSizeBytes = targetFile.length()
+                    val sizeFormatted = formatFileSize(finalSizeBytes)
+
+                    val completedEntity = initialEntity.copy(
+                        fileSizeBytes = finalSizeBytes,
+                        fileSizeFormatted = sizeFormatted,
+                        downloadStatus = "COMPLETED",
+                        downloadProgress = 100,
+                        downloadedAt = System.currentTimeMillis()
+                    )
+                    dao.insertDownloadedMovie(completedEntity)
+                    updateProgress(movie.id, 100)
+                    Log.i(TAG, "Stream fallback download complete: ${movie.title} (${sizeFormatted})")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Download error for ${movie.title}: ${e.message}", e)
+                    dao.updateDownloadProgress(movie.id, 0, "FAILED")
+                }
+            }
+
+            activeJobs.remove(movie.id)
+            activeDownloadIds.remove(movie.id)
+            removeProgress(movie.id)
         }
 
         activeJobs[movie.id] = job
@@ -187,14 +279,39 @@ object MovieDownloadManager {
     fun cancelDownload(context: Context, movieId: String, coroutineScope: CoroutineScope) {
         val job = activeJobs.remove(movieId)
         job?.cancel()
+
+        val downloadId = activeDownloadIds.remove(movieId)
+        if (downloadId != null) {
+            try {
+                val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+                dm?.remove(downloadId)
+            } catch (e: Exception) {
+                Log.w(TAG, "Error removing download ID $downloadId: ${e.message}")
+            }
+        }
+
         removeProgress(movieId)
         coroutineScope.launch(Dispatchers.IO) {
             val dao = MovieDatabase.getDatabase(context).movieDao()
+            val downloadDir = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: context.filesDir
+            val safeId = movieId.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+            val targetFile = File(downloadDir, "cinestream_movie_${safeId}.mp4")
+            if (targetFile.exists()) {
+                targetFile.delete()
+            }
             dao.deleteDownloadedMovie(movieId)
         }
     }
 
     suspend fun deleteDownload(context: Context, movieId: String) = withContext(Dispatchers.IO) {
+        val downloadId = activeDownloadIds.remove(movieId)
+        if (downloadId != null) {
+            try {
+                val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+                dm?.remove(downloadId)
+            } catch (ignored: Exception) {}
+        }
+
         val dao = MovieDatabase.getDatabase(context).movieDao()
         val downloadDir = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: context.filesDir
         val safeId = movieId.replace(Regex("[^a-zA-Z0-9_-]"), "_")
@@ -207,6 +324,14 @@ object MovieDownloadManager {
     }
 
     suspend fun clearAllDownloads(context: Context) = withContext(Dispatchers.IO) {
+        activeDownloadIds.values.forEach { downloadId ->
+            try {
+                val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+                dm?.remove(downloadId)
+            } catch (ignored: Exception) {}
+        }
+        activeDownloadIds.clear()
+
         val dao = MovieDatabase.getDatabase(context).movieDao()
         val downloadDir = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: context.filesDir
         downloadDir.listFiles()?.forEach { file ->
@@ -256,3 +381,4 @@ object MovieDownloadManager {
         }
     }
 }
+
