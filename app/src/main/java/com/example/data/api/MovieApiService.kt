@@ -106,24 +106,28 @@ interface MovieApiService {
     @POST("api/admin/movies")
     suspend fun adminCreateMovie(
         @Header("Authorization") authHeader: String,
+        @Header("X-Admin-Key") adminKey: String = "",
         @Body movie: Map<String, Any>
     ): ApiResponse<MovieDto>
 
     @POST("api/admin/movies/{id}/publish")
     suspend fun adminPublishMovie(
         @Header("Authorization") authHeader: String,
+        @Header("X-Admin-Key") adminKey: String = "",
         @Path("id") id: String
     ): ApiResponse<MovieDto>
 
     @DELETE("api/admin/movies/{id}")
     suspend fun adminDeleteMovie(
         @Header("Authorization") authHeader: String,
+        @Header("X-Admin-Key") adminKey: String = "",
         @Path("id") id: String
     ): ApiResponse<Map<String, Any>>
 
     @POST("api/admin/r2/upload")
     suspend fun adminUploadR2(
         @Header("Authorization") authHeader: String,
+        @Header("X-Admin-Key") adminKey: String = "",
         @Query("filename") filename: String,
         @Query("folder") folder: String,
         @Header("Content-Type") contentType: String,
@@ -133,21 +137,42 @@ interface MovieApiService {
     @POST("api/admin/uploads/initiate")
     suspend fun adminInitiateUpload(
         @Header("Authorization") authHeader: String,
+        @Header("X-Admin-Key") adminKey: String = "",
         @Body request: InitiateUploadRequest
     ): InitiateUploadResponse
 
     @POST("api/admin/uploads/sign-part")
     suspend fun adminSignPart(
         @Header("Authorization") authHeader: String,
+        @Header("X-Admin-Key") adminKey: String = "",
         @Body request: SignPartRequest
     ): SignPartResponse
+
+    @POST("api/admin/uploads/part")
+    suspend fun adminUploadPart(
+        @Header("Authorization") authHeader: String,
+        @Header("X-Admin-Key") adminKey: String = "",
+        @Query("key") key: String,
+        @Query("uploadId") uploadId: String,
+        @Query("partNumber") partNumber: Int,
+        @Header("Content-Type") contentType: String,
+        @Body partBody: RequestBody
+    ): PartUploadResponse
 
     @POST("api/admin/uploads/complete")
     suspend fun adminCompleteUpload(
         @Header("Authorization") authHeader: String,
+        @Header("X-Admin-Key") adminKey: String = "",
         @Body request: CompleteUploadRequest
     ): CompleteUploadResponse
 }
+
+data class PartUploadResponse(
+    val success: Boolean = true,
+    val partNumber: Int = 1,
+    val etag: String? = null,
+    val error: String? = null
+)
 
 data class InitiateUploadRequest(
     val filename: String,

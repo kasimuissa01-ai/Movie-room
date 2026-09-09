@@ -29,6 +29,7 @@ import {
   handleAdminR2Upload,
   handleAdminUploadInitiate,
   handleAdminUploadSignPart,
+  handleAdminUploadPart,
   handleAdminUploadComplete
 } from './routes/admin';
 import {
@@ -166,6 +167,9 @@ export default {
       }
       if (path === '/api/admin/uploads/sign-part' && method === 'POST') {
         return await handleAdminUploadSignPart(request, env);
+      }
+      if (path === '/api/admin/uploads/part' && method === 'POST') {
+        return await handleAdminUploadPart(request, env);
       }
       if (path === '/api/admin/uploads/complete' && method === 'POST') {
         return await handleAdminUploadComplete(request, env);

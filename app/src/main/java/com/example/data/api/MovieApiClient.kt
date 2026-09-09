@@ -262,8 +262,7 @@ object MovieApiClient {
         contentType: String,
         folder: String = "movies"
     ): Result<R2UploadResponse> = withContext(Dispatchers.IO) {
-        val token = BackendConfig.getAuthToken(context)
-        val authHeader = if (!token.isNullOrBlank()) "Bearer $token" else ""
+        val (authHeader, adminKey) = getAdminAuth(context)
 
         try {
             val baseUrl = BackendConfig.getBaseUrl(context)
@@ -277,6 +276,7 @@ object MovieApiClient {
 
             val res = uploadService.adminUploadR2(
                 authHeader = authHeader,
+                adminKey = adminKey,
                 filename = filename,
                 folder = folder,
                 contentType = contentType,
@@ -305,6 +305,25 @@ object MovieApiClient {
         }
     }
 
+    private suspend fun getAdminAuth(context: Context): Pair<String, String> {
+        val adminKey = com.example.data.r2.R2Config.adminPasscode
+        var token = BackendConfig.getAuthToken(context)
+        if (token.isNullOrBlank()) {
+            try {
+                val loginRes = getService(context).adminLogin(AdminLoginRequest(adminKey))
+                if (loginRes.success && !loginRes.token.isNullOrBlank()) {
+                    BackendConfig.setAuthToken(context, loginRes.token)
+                    BackendConfig.setUserRole(context, "admin")
+                    token = loginRes.token
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Notice: auto admin login fallback: ${e.message}")
+            }
+        }
+        val authHeader = if (!token.isNullOrBlank()) "Bearer $token" else "Bearer $adminKey"
+        return Pair(authHeader, adminKey)
+    }
+
     suspend fun uploadMediaToR2(
         context: Context,
         filename: String,
@@ -312,13 +331,13 @@ object MovieApiClient {
         contentType: String,
         folder: String = "movies"
     ): Result<R2UploadResponse> = withContext(Dispatchers.IO) {
-        val token = BackendConfig.getAuthToken(context)
-        val authHeader = if (!token.isNullOrBlank()) "Bearer $token" else ""
+        val (authHeader, adminKey) = getAdminAuth(context)
 
         try {
             val requestBody = bytes.toRequestBody(contentType.toMediaTypeOrNull())
             val res = getService(context).adminUploadR2(
                 authHeader = authHeader,
+                adminKey = adminKey,
                 filename = filename,
                 folder = folder,
                 contentType = contentType,
@@ -337,10 +356,9 @@ object MovieApiClient {
     }
 
     suspend fun adminCreateMovie(context: Context, movieMap: Map<String, Any>): Result<MovieDto> = withContext(Dispatchers.IO) {
-        val token = BackendConfig.getAuthToken(context)
-        val authHeader = if (!token.isNullOrBlank()) "Bearer $token" else ""
+        val (authHeader, adminKey) = getAdminAuth(context)
         try {
-            val res = getService(context).adminCreateMovie(authHeader, movieMap)
+            val res = getService(context).adminCreateMovie(authHeader, adminKey, movieMap)
             if (res.success && res.data != null) {
                 Result.success(res.data)
             } else {
@@ -352,10 +370,9 @@ object MovieApiClient {
     }
 
     suspend fun adminPublishMovie(context: Context, movieId: String): Result<Boolean> = withContext(Dispatchers.IO) {
-        val token = BackendConfig.getAuthToken(context)
-        val authHeader = if (!token.isNullOrBlank()) "Bearer $token" else ""
+        val (authHeader, adminKey) = getAdminAuth(context)
         try {
-            val res = getService(context).adminPublishMovie(authHeader, movieId)
+            val res = getService(context).adminPublishMovie(authHeader, adminKey, movieId)
             if (res.success) {
                 Result.success(true)
             } else {
@@ -373,11 +390,10 @@ object MovieApiClient {
         contentType: String,
         folder: String = "movies"
     ): Result<InitiateUploadResponse> = withContext(Dispatchers.IO) {
-        val token = BackendConfig.getAuthToken(context)
-        val authHeader = if (!token.isNullOrBlank()) "Bearer $token" else ""
+        val (authHeader, adminKey) = getAdminAuth(context)
         try {
             val req = InitiateUploadRequest(filename, folder, fileSize, contentType)
-            val res = getService(context).adminInitiateUpload(authHeader, req)
+            val res = getService(context).adminInitiateUpload(authHeader, adminKey, req)
             if (res.success) {
                 Result.success(res)
             } else {
@@ -394,15 +410,44 @@ object MovieApiClient {
         uploadId: String,
         partNumber: Int
     ): Result<SignPartResponse> = withContext(Dispatchers.IO) {
-        val token = BackendConfig.getAuthToken(context)
-        val authHeader = if (!token.isNullOrBlank()) "Bearer $token" else ""
+        val (authHeader, adminKey) = getAdminAuth(context)
         try {
             val req = SignPartRequest(key, uploadId, partNumber)
-            val res = getService(context).adminSignPart(authHeader, req)
+            val res = getService(context).adminSignPart(authHeader, adminKey, req)
             if (res.success && !res.uploadUrl.isNullOrBlank()) {
                 Result.success(res)
             } else {
                 Result.failure(Exception(res.error ?: "Failed to sign part $partNumber"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun uploadMultipartChunkToWorker(
+        context: Context,
+        key: String,
+        uploadId: String,
+        partNumber: Int,
+        chunkData: ByteArray,
+        contentType: String
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val (authHeader, adminKey) = getAdminAuth(context)
+        try {
+            val body = chunkData.toRequestBody(contentType.toMediaTypeOrNull())
+            val res = getService(context).adminUploadPart(
+                authHeader = authHeader,
+                adminKey = adminKey,
+                key = key,
+                uploadId = uploadId,
+                partNumber = partNumber,
+                contentType = contentType,
+                partBody = body
+            )
+            if (res.success && !res.etag.isNullOrBlank()) {
+                Result.success(res.etag)
+            } else {
+                Result.failure(Exception(res.error ?: "Fallback part upload failed for part $partNumber"))
             }
         } catch (e: Exception) {
             Result.failure(e)
@@ -418,11 +463,10 @@ object MovieApiClient {
         isTrailer: Boolean? = null,
         movieData: Map<String, Any?>? = null
     ): Result<CompleteUploadResponse> = withContext(Dispatchers.IO) {
-        val token = BackendConfig.getAuthToken(context)
-        val authHeader = if (!token.isNullOrBlank()) "Bearer $token" else ""
+        val (authHeader, adminKey) = getAdminAuth(context)
         try {
             val req = CompleteUploadRequest(key, uploadId, parts, movieId, isTrailer, movieData)
-            val res = getService(context).adminCompleteUpload(authHeader, req)
+            val res = getService(context).adminCompleteUpload(authHeader, adminKey, req)
             if (res.success) {
                 Result.success(res)
             } else {

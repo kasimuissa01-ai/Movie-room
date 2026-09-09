@@ -395,3 +395,47 @@ export async function handleAdminUploadComplete(request: Request, env: Env): Pro
     return createErrorResponse(`Failed to complete upload: ${e.message}`, 500);
   }
 }
+
+/**
+ * 4. Fallback Native R2 Part Upload
+ * When direct S3 presigned PUT fails or credentials are not yet set,
+ * stream 16 MB chunk directly to Worker which uses env.MOVIE_BUCKET native binding.
+ */
+export async function handleAdminUploadPart(request: Request, env: Env): Promise<Response> {
+  const user = await authenticateRequest(request, env);
+  if (!user || user.role !== 'admin') {
+    return createErrorResponse('Forbidden. Admin authorization required.', 403);
+  }
+
+  const url = new URL(request.url);
+  const key = url.searchParams.get('key')?.trim();
+  const uploadId = url.searchParams.get('uploadId')?.trim();
+  const partNumberStr = url.searchParams.get('partNumber')?.trim();
+  const partNumber = partNumberStr ? parseInt(partNumberStr, 10) : 0;
+
+  if (!key || !uploadId || partNumber < 1) {
+    return createErrorResponse('Missing key, uploadId, or valid partNumber.', 400);
+  }
+
+  if (!env.MOVIE_BUCKET) {
+    return createErrorResponse('R2 bucket binding not available on server.', 500);
+  }
+
+  if (!request.body) {
+    return createErrorResponse('Empty part payload.', 400);
+  }
+
+  try {
+    const multipart = env.MOVIE_BUCKET.resumeMultipartUpload(key, uploadId);
+    const uploadedPart = await multipart.uploadPart(partNumber, request.body);
+    return createJsonResponse({
+      success: true,
+      partNumber: uploadedPart.partNumber,
+      etag: uploadedPart.etag
+    });
+  } catch (e: any) {
+    console.error(`[Diagnostic] Fallback uploadPart error for part ${partNumber}:`, e);
+    return createErrorResponse(`Failed to upload chunk: ${e?.message || e}`, 500);
+  }
+}
+

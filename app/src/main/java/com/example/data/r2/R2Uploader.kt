@@ -246,14 +246,7 @@ object R2Uploader {
             inputStream.use { input ->
                 for (partNum in 1..totalParts) {
                     val signRes = MovieApiClient.getSignPartUrl(context, targetKey, uploadId, partNum)
-                    if (signRes.isFailure) {
-                        val err = signRes.exceptionOrNull()?.message ?: "Failed to sign part $partNum"
-                        Log.e(TAG, err)
-                        return@withContext UploadResult.Failure(err)
-                    }
-
-                    val partUploadUrl = signRes.getOrThrow().uploadUrl
-                        ?: return@withContext UploadResult.Failure("Missing signed URL for part $partNum")
+                    val partUploadUrl = signRes.getOrNull()?.uploadUrl
 
                     val buffer = ByteArray(partSize.toInt())
                     var bytesReadTotal = 0
@@ -272,39 +265,84 @@ object R2Uploader {
                     var partSuccess = false
                     var lastPartError = ""
 
-                    while (attempts < 3 && !partSuccess) {
-                        attempts++
-                        try {
-                            val partBody = RequestBody.create(contentType.toMediaTypeOrNull(), partData)
-                            val partReq = okhttp3.Request.Builder()
-                                .url(partUploadUrl)
-                                .put(partBody)
-                                .build()
+                    // 1. Try direct presigned S3 PUT if uploadUrl is available
+                    if (!partUploadUrl.isNullOrBlank()) {
+                        while (attempts < 2 && !partSuccess) {
+                            attempts++
+                            try {
+                                val partBody = RequestBody.create(contentType.toMediaTypeOrNull(), partData)
+                                val partReq = okhttp3.Request.Builder()
+                                    .url(partUploadUrl)
+                                    .put(partBody)
+                                    .build()
 
-                            okHttpClient.newCall(partReq).execute().use { resp ->
-                                if (resp.isSuccessful) {
-                                    val rawEtag = resp.header("ETag") ?: resp.header("etag") ?: ""
-                                    etag = rawEtag.replace("\"", "").trim()
-                                    if (etag.isNotBlank()) {
-                                        partSuccess = true
+                                okHttpClient.newCall(partReq).execute().use { resp ->
+                                    if (resp.isSuccessful) {
+                                        val rawEtag = resp.header("ETag") ?: resp.header("etag") ?: ""
+                                        etag = rawEtag.replace("\"", "").trim()
+                                        if (etag.isNotBlank()) {
+                                            partSuccess = true
+                                        } else {
+                                            lastPartError = "Empty ETag header from R2"
+                                        }
                                     } else {
-                                        lastPartError = "Empty ETag header from R2"
+                                        val errBody = resp.body?.string() ?: ""
+                                        Log.e(TAG, "R2 part $partNum PUT failed: code=${resp.code}, body=$errBody")
+                                        lastPartError = "HTTP ${resp.code}: $errBody"
                                     }
-                                } else {
-                                    val errBody = resp.body?.string() ?: ""
-                                    Log.e(TAG, "R2 part $partNum PUT failed: host=${resp.request.url.host}, path=${resp.request.url.encodedPath}, code=${resp.code}, body=$errBody")
-                                    lastPartError = "HTTP ${resp.code}: $errBody"
                                 }
+                            } catch (e: Exception) {
+                                lastPartError = e.message ?: "Network error"
+                                kotlinx.coroutines.delay(500)
                             }
-                        } catch (e: Exception) {
-                            lastPartError = e.message ?: "Network error"
-                            kotlinx.coroutines.delay(1000)
                         }
                     }
 
+                    // 2. Fallback: Stream part to Cloudflare Worker R2 native binding
                     if (!partSuccess) {
-                        Log.e(TAG, "Part $partNum failed after 3 attempts: $lastPartError")
-                        return@withContext UploadResult.Failure("Failed uploading part $partNum/$totalParts: $lastPartError")
+                        Log.i(TAG, "Direct R2 PUT skipped or failed for part $partNum ($lastPartError). Attempting Worker fallback chunk upload...")
+                        val fallbackRes = MovieApiClient.uploadMultipartChunkToWorker(
+                            context = context,
+                            key = targetKey,
+                            uploadId = uploadId,
+                            partNumber = partNum,
+                            chunkData = partData,
+                            contentType = contentType
+                        )
+                        if (fallbackRes.isSuccess) {
+                            etag = fallbackRes.getOrThrow()
+                            partSuccess = true
+                            Log.i(TAG, "Worker fallback chunk upload succeeded for part $partNum: etag=$etag")
+                        } else {
+                            val fbError = fallbackRes.exceptionOrNull()?.message ?: "Unknown worker error"
+                            // If part 1 fails on chunk route (e.g. 404 because worker hasn't been redeployed yet)
+                            // and the file is <= 100 MB, stream directly via Worker's live single upload endpoint
+                            if (partNum == 1 && fileSize in 1..104857600L) {
+                                Log.i(TAG, "Chunk route unavailable ($fbError). Falling back to live Worker single-stream upload for file ($fileSize bytes)...")
+                                val streamingBody = UriStreamingRequestBody(context, uri, contentType, onProgress)
+                                val workerRes = MovieApiClient.uploadStreamingMediaToR2(context, cleanFilename, streamingBody, contentType, folder)
+                                if (workerRes.isSuccess) {
+                                    val uploadData = workerRes.getOrThrow()
+                                    val streamKey = uploadData.key ?: targetKey
+                                    val streamUrl = uploadData.url ?: "https://pub-cinestream.r2.dev/$streamKey"
+                                    MovieApiClient.completeR2Upload(
+                                        context = context,
+                                        key = streamKey,
+                                        uploadId = null,
+                                        parts = null,
+                                        movieId = movieId,
+                                        isTrailer = isTrailer,
+                                        movieData = movieData
+                                    )
+                                    return@withContext UploadResult.Success(streamKey, streamUrl)
+                                } else {
+                                    val sErr = workerRes.exceptionOrNull()?.message ?: "Single-stream upload failed"
+                                    Log.e(TAG, "Worker single-stream fallback also failed: $sErr")
+                                }
+                            }
+                            Log.e(TAG, "Part $partNum failed both direct and worker fallback: $fbError")
+                            return@withContext UploadResult.Failure("Failed uploading part $partNum/$totalParts: $fbError. To upload large files, please run 'wrangler deploy' in the worker directory.")
+                        }
                     }
 
                     completedParts.add(com.example.data.api.CompletePartDto(partNum, etag))
