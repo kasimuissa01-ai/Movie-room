@@ -383,6 +383,34 @@ object MovieApiClient {
         }
     }
 
+    suspend fun adminUpdateMovie(context: Context, movieId: String, updates: Map<String, Any?>): Result<MovieDto> = withContext(Dispatchers.IO) {
+        val (authHeader, adminKey) = getAdminAuth(context)
+        try {
+            val res = getService(context).adminUpdateMovie(authHeader, adminKey, movieId, updates)
+            if (res.success && res.data != null) {
+                Result.success(res.data)
+            } else {
+                Result.failure(Exception(res.error ?: res.message ?: "Failed to update movie"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun adminDeleteMovie(context: Context, movieId: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        val (authHeader, adminKey) = getAdminAuth(context)
+        try {
+            val res = getService(context).adminDeleteMovie(authHeader, adminKey, movieId)
+            if (res.success) {
+                Result.success(true)
+            } else {
+                Result.failure(Exception(res.error ?: res.message ?: "Failed to delete movie"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun initiateR2Upload(
         context: Context,
         filename: String,

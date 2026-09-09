@@ -31,11 +31,14 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Downloading
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.OfflinePin
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -99,7 +102,9 @@ fun MovieDetailsScreen(
     onDownloadClick: (Movie) -> Unit = {},
     onDeleteDownloadClick: (String) -> Unit = {},
     isOnline: Boolean = true,
-    isRoomCached: Boolean = false
+    isRoomCached: Boolean = false,
+    isAdminLoggedIn: Boolean = false,
+    onEditMovieClick: (Movie) -> Unit = {}
 ) {
     Box(
         modifier = modifier
@@ -462,6 +467,73 @@ fun MovieDetailsScreen(
                             color = CineTextMuted,
                             fontSize = 11.sp
                         )
+                    }
+
+                    // Admin Edit Movie Button (Visible only to authenticated Admin)
+                    if (isAdminLoggedIn) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = CineSurfaceElevated),
+                            border = BorderStroke(1.dp, CineGold.copy(alpha = 0.5f))
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(CircleShape)
+                                            .background(CineGold.copy(alpha = 0.2f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Edit,
+                                            contentDescription = null,
+                                            tint = CineGold,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                    Column {
+                                        Text(
+                                            text = "Admin Control",
+                                            color = CineGold,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "Edit title, synopsis, cover & trailer",
+                                            color = CineTextMuted,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+
+                                Button(
+                                    onClick = { onEditMovieClick(movie) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = CineGold),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                                    modifier = Modifier.testTag("admin_edit_movie_button")
+                                ) {
+                                    Text(
+                                        text = "Edit Movie",
+                                        color = CineBlack,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -1046,6 +1046,188 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Updates an existing movie's details (title, description, cover/poster, trailer, etc.)
+     * and persists changes to Cloudflare Worker Firestore backend as well as local Room database cache.
+     */
+    fun updateMovie(
+        context: Context,
+        movieId: String,
+        title: String,
+        description: String,
+        category: String,
+        genres: String,
+        year: Int,
+        durationMinutes: Int,
+        rating: Float,
+        posterUri: Uri? = null,
+        trailerUri: Uri? = null,
+        directPosterUrl: String = "",
+        directTrailerUrl: String = "",
+        directVideoUrl: String = "",
+        isHeroFeatured: Boolean = true,
+        onFinished: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isUploading.value = true
+            _uploadProgress.value = 0.05f
+            _uploadStatusText.value = "Saving movie changes..."
+
+            try {
+                val cleanTitle = title.trim().lowercase().replace(Regex("[^a-z0-9]"), "_").take(30)
+                val timestamp = System.currentTimeMillis()
+
+                var finalPosterUrl = directPosterUrl.trim()
+                var finalTrailerUrl = directTrailerUrl.trim()
+                val finalVideoUrl = directVideoUrl.trim()
+
+                // 1. Upload new poster if provided
+                if (posterUri != null) {
+                    _uploadStatusText.value = "Uploading updated cover image..."
+                    _uploadProgress.value = 0.25f
+                    val mimeType = context.contentResolver.getType(posterUri) ?: "image/jpeg"
+                    val ext = if (mimeType.contains("png", ignoreCase = true)) "png" else if (mimeType.contains("webp", ignoreCase = true)) "webp" else "jpg"
+                    val posterKey = "posters/${timestamp}_$cleanTitle.$ext"
+                    val posterResult = R2Uploader.uploadFromUri(
+                        context = context,
+                        uri = posterUri,
+                        objectKey = posterKey,
+                        contentType = mimeType,
+                        folder = "posters"
+                    ) { _, _, percent ->
+                        _uploadProgress.value = 0.25f + (percent / 100f) * 0.35f
+                    }
+                    when (posterResult) {
+                        is R2Uploader.UploadResult.Success -> {
+                            finalPosterUrl = posterResult.publicUrl
+                            Log.i(TAG, "New poster uploaded to R2: $finalPosterUrl")
+                        }
+                        is R2Uploader.UploadResult.Failure -> {
+                            Log.e(TAG, "Poster upload failed: ${posterResult.errorMessage}")
+                        }
+                    }
+                }
+
+                // 2. Upload new trailer if provided
+                if (trailerUri != null) {
+                    _uploadStatusText.value = "Uploading updated trailer video..."
+                    _uploadProgress.value = 0.60f
+                    val trailerKey = "trailers/${timestamp}_${cleanTitle}_trailer.mp4"
+                    val trailerResult = R2Uploader.uploadFromUri(
+                        context = context,
+                        uri = trailerUri,
+                        objectKey = trailerKey,
+                        contentType = "video/mp4",
+                        folder = "trailers"
+                    ) { _, _, percent ->
+                        _uploadProgress.value = 0.60f + (percent / 100f) * 0.25f
+                    }
+                    when (trailerResult) {
+                        is R2Uploader.UploadResult.Success -> {
+                            finalTrailerUrl = trailerResult.publicUrl
+                            Log.i(TAG, "New trailer uploaded to R2: $finalTrailerUrl")
+                        }
+                        is R2Uploader.UploadResult.Failure -> {
+                            Log.e(TAG, "Trailer upload failed: ${trailerResult.errorMessage}")
+                        }
+                    }
+                }
+
+                // 3. Update backend API
+                _uploadStatusText.value = "Updating movie in database..."
+                _uploadProgress.value = 0.85f
+
+                val updates = mutableMapOf<String, Any?>(
+                    "title" to title.trim(),
+                    "overview" to description.trim(),
+                    "description" to description.trim(),
+                    "category" to category.trim(),
+                    "genres" to genres.split(",").map { it.trim() }.filter { it.isNotEmpty() },
+                    "releaseYear" to year.toString(),
+                    "release_date" to year.toString(),
+                    "durationMinutes" to durationMinutes,
+                    "runtime" to durationMinutes,
+                    "rating" to rating,
+                    "isFeatured" to isHeroFeatured
+                )
+
+                if (finalPosterUrl.isNotBlank()) {
+                    updates["posterUrl"] = finalPosterUrl
+                    updates["backdropUrl"] = finalPosterUrl
+                }
+                if (finalTrailerUrl.isNotBlank()) {
+                    updates["trailerUrl"] = finalTrailerUrl
+                }
+                if (finalVideoUrl.isNotBlank()) {
+                    updates["videoUrl"] = finalVideoUrl
+                }
+
+                val updateResult = MovieApiClient.adminUpdateMovie(context, movieId, updates)
+                if (updateResult.isFailure) {
+                    val err = updateResult.exceptionOrNull()?.message ?: "Failed to update movie on server"
+                    Log.w(TAG, "Backend adminUpdateMovie notice: $err. Proceeding with local cache update.")
+                }
+
+                // 4. Update in local Room database
+                val existingUploadedMovie = uploadedMovies.value.firstOrNull { it.id == movieId }
+                val resolvedPoster = finalPosterUrl.ifBlank { existingUploadedMovie?.posterUrl ?: "" }
+                val resolvedTrailer = finalTrailerUrl.ifBlank { existingUploadedMovie?.trailerUrl ?: "" }
+                val resolvedVideo = finalVideoUrl.ifBlank { existingUploadedMovie?.videoUrl ?: "" }
+
+                val updatedEntity = UploadedMovieEntity(
+                    id = movieId,
+                    title = title.trim(),
+                    description = description.trim(),
+                    posterUrl = resolvedPoster,
+                    backdropUrl = resolvedPoster,
+                    videoUrl = resolvedVideo,
+                    trailerUrl = resolvedTrailer,
+                    year = year,
+                    durationMinutes = durationMinutes,
+                    rating = rating,
+                    genresString = genres.ifBlank { "Action" },
+                    director = existingUploadedMovie?.director ?: "Admin",
+                    studio = existingUploadedMovie?.studio ?: "Cloudflare R2 Cinema",
+                    category = category.ifBlank { "Action" },
+                    uploadedAt = timestamp,
+                    r2StorageKey = "",
+                    isHeroFeatured = isHeroFeatured
+                )
+
+                repository.saveUploadedMovie(updatedEntity)
+
+                // Also update memory map & details cache
+                val currentMovie = updatedEntity.toMovie()
+                val dMap = _dynamicMovies.value.toMutableMap()
+                dMap[movieId] = currentMovie
+                _dynamicMovies.value = dMap
+
+                val existingDetail = _movieDetailsMap.value[movieId]
+                _movieDetailsMap.value = _movieDetailsMap.value + (movieId to MovieDetailsState(
+                    isLoading = false,
+                    isError = false,
+                    movie = currentMovie,
+                    recommendations = existingDetail?.recommendations ?: emptyList(),
+                    isLoadingRecommendations = false
+                ))
+
+                loadHomeFeeds()
+
+                _uploadProgress.value = 1f
+                _uploadStatusText.value = "Movie updated successfully!"
+                delay(200)
+                onFinished(true, "Successfully updated \"$title\"!")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in updateMovie: ${e.message}", e)
+                onFinished(false, "Update failed: ${e.localizedMessage ?: e.message}")
+            } finally {
+                _isUploading.value = false
+                _uploadProgress.value = 0f
+                _uploadStatusText.value = ""
+            }
+        }
+    }
+
     fun deleteUploadedMovie(id: String) {
         viewModelScope.launch {
             repository.deleteUploadedMovie(id)

@@ -107,6 +107,55 @@ export async function handleAdminDeleteMovie(request: Request, env: Env, id: str
   }
 }
 
+export async function handleAdminUpdateMovie(request: Request, env: Env, id: string): Promise<Response> {
+  const user = await authenticateRequest(request, env);
+  if (!user || user.role !== 'admin') {
+    return createErrorResponse('Forbidden. Admin authorization required.', 403);
+  }
+
+  try {
+    const body: any = await request.json();
+    const firestore = new FirestoreService(env);
+    const existing = await firestore.getMovieById(id);
+
+    const updated = {
+      ...(existing || {}),
+      id,
+      title: body.title !== undefined ? body.title : existing?.title,
+      overview: body.overview !== undefined ? body.overview : (body.description !== undefined ? body.description : existing?.overview),
+      posterUrl: body.posterUrl !== undefined ? body.posterUrl : (body.poster !== undefined ? body.poster : existing?.posterUrl),
+      backdropUrl: body.backdropUrl !== undefined ? body.backdropUrl : (body.backdrop !== undefined ? body.backdrop : existing?.backdropUrl),
+      videoKey: body.videoKey !== undefined ? body.videoKey : (body.video_key !== undefined ? body.video_key : existing?.videoKey),
+      videoUrl: body.videoUrl !== undefined ? body.videoUrl : (body.video_url !== undefined ? body.video_url : existing?.videoUrl),
+      trailerKey: body.trailerKey !== undefined ? body.trailerKey : (body.trailer_key !== undefined ? body.trailer_key : existing?.trailerKey),
+      trailerUrl: body.trailerUrl !== undefined ? body.trailerUrl : (body.trailer_url !== undefined ? body.trailer_url : existing?.trailerUrl),
+      releaseYear: body.releaseYear !== undefined ? body.releaseYear : (body.release_date !== undefined ? body.release_date : existing?.releaseYear),
+      rating: body.rating !== undefined ? parseFloat(body.rating) : (existing?.rating ?? 8.0),
+      durationMinutes: body.durationMinutes !== undefined ? parseInt(body.durationMinutes) : (body.runtime !== undefined ? parseInt(body.runtime) : (existing?.durationMinutes ?? 120)),
+      genres: body.genres !== undefined ? (Array.isArray(body.genres) ? body.genres : [body.genres]) : (existing?.genres ?? ['Action']),
+      category: body.category !== undefined ? body.category : (existing?.category ?? 'Action'),
+      isTrending: body.isTrending !== undefined ? body.isTrending : (existing?.isTrending ?? true),
+      isPopular: body.isPopular !== undefined ? body.isPopular : (existing?.isPopular ?? true),
+      isFeatured: body.isFeatured !== undefined ? body.isFeatured : (existing?.isFeatured ?? false),
+      published: body.published !== undefined ? body.published : (existing?.published ?? true),
+      updatedAt: new Date().toISOString()
+    };
+
+    const success = await firestore.saveMovie(id, updated);
+    if (!success) {
+      return createErrorResponse('Failed to update movie in Firestore catalog.', 500);
+    }
+
+    return createJsonResponse({
+      success: true,
+      message: `Movie ${id} updated successfully`,
+      data: updated
+    });
+  } catch (e: any) {
+    return createErrorResponse(`Failed to update movie: ${e.message}`, 400);
+  }
+}
+
 export async function handleAdminR2Upload(request: Request, env: Env): Promise<Response> {
   const user = await authenticateRequest(request, env);
   if (!user || user.role !== 'admin') {

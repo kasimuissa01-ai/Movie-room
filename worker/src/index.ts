@@ -26,6 +26,7 @@ import {
   handleAdminCreateMovie,
   handleAdminPublishMovie,
   handleAdminDeleteMovie,
+  handleAdminUpdateMovie,
   handleAdminR2Upload,
   handleAdminUploadInitiate,
   handleAdminUploadSignPart,
@@ -158,6 +159,10 @@ export default {
       if (path.startsWith('/api/admin/movies/') && method === 'DELETE') {
         const id = path.replace('/api/admin/movies/', '');
         return await handleAdminDeleteMovie(request, env, id);
+      }
+      if (path.startsWith('/api/admin/movies/') && (method === 'PUT' || method === 'PATCH')) {
+        const id = path.replace('/api/admin/movies/', '');
+        return await handleAdminUpdateMovie(request, env, id);
       }
       if (path === '/api/admin/r2/upload' && method === 'POST') {
         return await handleAdminR2Upload(request, env);

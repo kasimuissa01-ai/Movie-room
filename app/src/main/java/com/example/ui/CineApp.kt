@@ -33,6 +33,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.data.SampleMovies
+import com.example.model.Movie
+import com.example.ui.components.AdminEditMovieDialog
 import com.example.ui.components.AdminLoginDialog
 import com.example.ui.components.AdminReleasePublisherDialog
 import com.example.ui.components.AdminUploadMovieDialog
@@ -108,6 +110,7 @@ fun CineApp(
 
     var showAdminLoginDialog by remember { mutableStateOf(false) }
     var showAdminUploadDialog by remember { mutableStateOf(false) }
+    var movieToEdit by remember { mutableStateOf<Movie?>(null) }
 
     var currentTab by remember { mutableStateOf(CineNavTab.HOME) }
 
@@ -373,6 +376,15 @@ fun CineApp(
                         )
                     }
 
+                    // Admin Edit Movie Dialog
+                    if (movieToEdit != null && isAdminLoggedIn) {
+                        AdminEditMovieDialog(
+                            movie = movieToEdit!!,
+                            viewModel = viewModel,
+                            onDismiss = { movieToEdit = null }
+                        )
+                    }
+
                     // Floating top banner when update is minimized or ready
                     if (!showUpdateDialog && appUpdateInfo != null) {
                         BackgroundUpdateBanner(
@@ -538,7 +550,9 @@ fun CineApp(
                 onRelatedMovieClick = { rec ->
                     navController.navigate("details/${rec.id}")
                 },
-                onBackClick = { navController.popBackStack() }
+                onBackClick = { navController.popBackStack() },
+                isAdminLoggedIn = isAdminLoggedIn,
+                onEditMovieClick = { movieToEdit = it }
             )
         }
 
