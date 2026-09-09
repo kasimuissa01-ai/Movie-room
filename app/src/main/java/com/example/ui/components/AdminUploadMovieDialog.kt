@@ -139,7 +139,7 @@ fun AdminUploadMovieDialog(
             delay(350)
             isSearching = true
             try {
-                val results = TmdbClient.searchMovies(query.trim())
+                val results = TmdbClient.searchMovies(query.trim(), context)
                 searchResults = results
             } catch (e: Exception) {
                 searchResults = emptyList()

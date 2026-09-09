@@ -66,6 +66,9 @@ object R2Uploader {
                 val buffer = ByteArray(64 * 1024) // 64 KB buffer chunks
                 var uploaded = 0L
                 var read: Int
+                var lastPercent = -1
+                var lastNotifyTime = 0L
+
                 while (input.read(buffer).also { read = it } != -1) {
                     sink.write(buffer, 0, read)
                     uploaded += read
@@ -74,7 +77,12 @@ object R2Uploader {
                     } else {
                         50
                     }
-                    onProgress(uploaded, total, percent)
+                    val now = System.currentTimeMillis()
+                    if (percent != lastPercent || (now - lastNotifyTime) > 150) {
+                        lastPercent = percent
+                        lastNotifyTime = now
+                        onProgress(uploaded, total, percent)
+                    }
                 }
             }
         }

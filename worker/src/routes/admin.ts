@@ -126,16 +126,20 @@ export async function handleAdminR2Upload(request: Request, env: Env): Promise<R
     const cleanKey = `${folder}/${Date.now()}_${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
 
     const r2 = new R2Service(env);
-    const arrayBuffer = await request.arrayBuffer();
+    if (!request.body) {
+      return createErrorResponse('Empty upload body received.', 400);
+    }
 
-    const publicUrl = await r2.putObject(cleanKey, arrayBuffer, contentType);
+    const publicUrl = await r2.putObject(cleanKey, request.body, contentType);
+    const contentLengthStr = request.headers.get('content-length');
+    const sizeBytes = contentLengthStr ? parseInt(contentLengthStr, 10) : 0;
 
     return createJsonResponse({
       success: true,
-      message: 'File uploaded successfully to Cloudflare R2 stories',
+      message: 'File uploaded successfully to Cloudflare R2 storage',
       key: cleanKey,
       url: publicUrl,
-      sizeBytes: arrayBuffer.byteLength
+      sizeBytes
     });
   } catch (e) {
     console.error('R2 upload failed:', e);

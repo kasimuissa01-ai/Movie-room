@@ -825,6 +825,11 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        if (_isUploading.value) {
+            onFinished(false, "Upload is already in progress. Please wait.")
+            return
+        }
+
         viewModelScope.launch {
             _isUploading.value = true
             _uploadProgress.value = 0.05f
@@ -852,10 +857,14 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                         contentType = "video/mp4",
                         folder = "movies"
                     ) { uploaded, total, percent ->
-                        _uploadProgress.value = 0.10f + (percent / 100f) * 0.60f
+                        _uploadProgress.value = 0.10f + (percent / 100f) * 0.55f
                         val mbUploaded = uploaded / (1024 * 1024)
                         val mbTotal = total / (1024 * 1024)
-                        _uploadStatusText.value = "Uploading to Cloudflare R2: $mbUploaded MB / $mbTotal MB ($percent%)"
+                        _uploadStatusText.value = if (mbTotal > 0) {
+                            "Uploading to Cloudflare R2: $mbUploaded MB / $mbTotal MB ($percent%)"
+                        } else {
+                            "Uploading to Cloudflare R2: $mbUploaded MB ($percent%)"
+                        }
                     }
 
                     when (result) {
@@ -865,21 +874,19 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                             Log.i(TAG, "Video uploaded to R2: $finalVideoUrl")
                         }
                         is R2Uploader.UploadResult.Failure -> {
-                            Log.w(TAG, "Video upload to R2 notice: ${result.errorMessage}")
-                            if (finalVideoUrl.isBlank()) {
-                                finalVideoUrl = R2Config.getPublicUrl(videoKey)
-                            }
+                            Log.e(TAG, "Video upload to R2 failed: ${result.errorMessage}")
+                            onFinished(false, "Video upload failed: ${result.errorMessage}")
+                            return@launch
                         }
                     }
-
-                    if (finalVideoUrl.isBlank()) {
-                        finalVideoUrl = R2Config.getPublicUrl(videoKey)
-                    }
-                } else if (finalVideoUrl.isBlank()) {
-                    finalVideoUrl = R2Config.getPublicUrl("movies/${timestamp}_$cleanTitle.mp4")
                 }
 
-                // 2. Upload Trailer directly to Cloudflare R2
+                if (finalVideoUrl.isBlank()) {
+                    onFinished(false, "Please select a video file or enter a direct video URL.")
+                    return@launch
+                }
+
+                // 2. Upload Trailer directly to Cloudflare R2 if selected
                 if (trailerUri != null) {
                     _uploadStatusText.value = "Uploading trailer clip to Cloudflare R2..."
                     val trailerKey = "trailers/${timestamp}_${cleanTitle}_trailer.mp4"
@@ -890,13 +897,16 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                         contentType = "video/mp4",
                         folder = "trailers"
                     ) { _, _, percent ->
-                        _uploadProgress.value = 0.72f + (percent / 100f) * 0.14f
-                        _uploadStatusText.value = "Uploading trailer to R2: ($percent%)"
+                        _uploadProgress.value = 0.65f + (percent / 100f) * 0.15f
+                        _uploadStatusText.value = "Uploading trailer to R2 ($percent%)"
                     }
-                    if (trailerResult is R2Uploader.UploadResult.Success) {
-                        finalTrailerUrl = trailerResult.publicUrl
-                    } else if (finalTrailerUrl.isBlank()) {
-                        finalTrailerUrl = R2Config.getPublicUrl(trailerKey)
+                    when (trailerResult) {
+                        is R2Uploader.UploadResult.Success -> {
+                            finalTrailerUrl = trailerResult.publicUrl
+                        }
+                        is R2Uploader.UploadResult.Failure -> {
+                            Log.w(TAG, "Trailer upload notice: ${trailerResult.errorMessage}")
+                        }
                     }
                 }
 
@@ -904,24 +914,34 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     finalTrailerUrl = finalVideoUrl
                 }
 
-                // 3. Upload Poster Artwork directly to Cloudflare R2
+                // 3. Upload Poster Artwork directly to Cloudflare R2 if selected
                 if (posterUri != null) {
                     _uploadStatusText.value = "Uploading poster artwork to Cloudflare R2..."
-                    _uploadProgress.value = 0.88f
-                    val posterKey = "posters/${timestamp}_$cleanTitle.jpg"
+                    _uploadProgress.value = 0.80f
+                    val mimeType = context.contentResolver.getType(posterUri) ?: "image/jpeg"
+                    val ext = if (mimeType.contains("png", ignoreCase = true)) "png" else if (mimeType.contains("webp", ignoreCase = true)) "webp" else "jpg"
+                    val posterKey = "posters/${timestamp}_$cleanTitle.$ext"
                     val posterResult = R2Uploader.uploadFromUri(
                         context = context,
                         uri = posterUri,
                         objectKey = posterKey,
-                        contentType = "image/jpeg",
+                        contentType = mimeType,
                         folder = "posters"
                     ) { _, _, percent ->
-                        _uploadProgress.value = 0.88f + (percent / 100f) * 0.05f
+                        _uploadProgress.value = 0.80f + (percent / 100f) * 0.08f
                     }
-                    if (posterResult is R2Uploader.UploadResult.Success) {
-                        finalPosterUrl = posterResult.publicUrl
-                    } else if (finalPosterUrl.isBlank()) {
-                        finalPosterUrl = R2Config.getPublicUrl(posterKey)
+                    when (posterResult) {
+                        is R2Uploader.UploadResult.Success -> {
+                            finalPosterUrl = posterResult.publicUrl
+                            Log.i(TAG, "Poster uploaded to R2: $finalPosterUrl")
+                        }
+                        is R2Uploader.UploadResult.Failure -> {
+                            Log.e(TAG, "Poster upload to R2 failed: ${posterResult.errorMessage}")
+                            if (finalPosterUrl.isBlank()) {
+                                onFinished(false, "Poster image upload failed: ${posterResult.errorMessage}")
+                                return@launch
+                            }
+                        }
                     }
                 }
 
@@ -936,9 +956,9 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     File(context.filesDir, "posters").deleteRecursively()
                 } catch (ignored: Exception) {}
 
-                // 4. Save to Firestore via Worker and local Room database
-                _uploadStatusText.value = "Saving movie to storage catalog..."
-                _uploadProgress.value = 0.94f
+                // 4. Save metadata via Worker API
+                _uploadStatusText.value = "Saving metadata to catalog..."
+                _uploadProgress.value = 0.90f
 
                 val videoKey = if (r2Key.isNotBlank()) r2Key else "movies/${timestamp}_$cleanTitle.mp4"
                 val trailerKey = "trailers/${timestamp}_${cleanTitle}_trailer.mp4"
@@ -957,18 +977,30 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     "genres" to genres.split(",").map { it.trim() }.filter { it.isNotBlank() },
                     "category" to category.trim().ifBlank { "Action" },
                     "featured" to isHeroFeatured,
-                    "published" to true
+                    "published" to false
                 )
 
-                try {
-                    val createResult = MovieApiClient.adminCreateMovie(context, movieMap)
-                    if (createResult.isSuccess) {
-                        MovieApiClient.adminPublishMovie(context, movieId)
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Backend Firestore sync notice: ${e.message}")
+                val createResult = MovieApiClient.adminCreateMovie(context, movieMap)
+                if (createResult.isFailure) {
+                    val createErr = createResult.exceptionOrNull()?.message ?: "Failed to save movie metadata"
+                    Log.e(TAG, "Backend adminCreateMovie error: $createErr")
+                    onFinished(false, "Metadata creation failed: $createErr")
+                    return@launch
                 }
 
+                // 5. Publish movie through Worker API
+                _uploadStatusText.value = "Publishing movie to catalog..."
+                _uploadProgress.value = 0.95f
+
+                val publishResult = MovieApiClient.adminPublishMovie(context, movieId)
+                if (publishResult.isFailure) {
+                    val publishErr = publishResult.exceptionOrNull()?.message ?: "Failed to publish movie"
+                    Log.e(TAG, "Backend adminPublishMovie error: $publishErr")
+                    onFinished(false, "Uploaded to R2, but publish failed: $publishErr")
+                    return@launch
+                }
+
+                // Save to local Room repository
                 val entity = UploadedMovieEntity(
                     id = movieId,
                     title = title.trim(),
@@ -990,6 +1022,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                 )
 
                 repository.saveUploadedMovie(entity)
+                loadHomeFeeds()
 
                 // Dispatch New Release Notification to users
                 try {
@@ -999,7 +1032,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 _uploadProgress.value = 1f
-                _uploadStatusText.value = "Movie successfully published to Movie Room!"
+                _uploadStatusText.value = "Movie successfully published!"
                 delay(300)
                 onFinished(true, "Successfully uploaded and published '$title'!")
             } catch (e: Exception) {
