@@ -463,7 +463,16 @@ object MovieApiClient {
         val (authHeader, adminKey) = getAdminAuth(context)
         try {
             val body = chunkData.toRequestBody(contentType.toMediaTypeOrNull())
-            val res = getService(context).adminUploadPart(
+            val baseUrl = BackendConfig.getBaseUrl(context)
+            val formattedBase = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
+            val uploadService = Retrofit.Builder()
+                .baseUrl(formattedBase)
+                .client(uploadOkHttpClient)
+                .addConverterFactory(MoshiConverterFactory.create(moshi))
+                .build()
+                .create(MovieApiService::class.java)
+
+            val res = uploadService.adminUploadPart(
                 authHeader = authHeader,
                 adminKey = adminKey,
                 key = key,

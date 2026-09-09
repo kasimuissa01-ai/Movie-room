@@ -847,8 +847,8 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
                 // 1. Upload Video directly to Cloudflare R2
                 if (videoUri != null) {
-                    _uploadStatusText.value = "Uploading feature film to Cloudflare R2..."
-                    _uploadProgress.value = 0.10f
+                    _uploadStatusText.value = "Starting Cloudflare R2 upload..."
+                    _uploadProgress.value = 0.01f
                     val videoKey = "movies/${timestamp}_$cleanTitle.mp4"
                     val result = R2Uploader.uploadFromUri(
                         context = context,
@@ -857,7 +857,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                         contentType = "video/mp4",
                         folder = "movies"
                     ) { uploaded, total, percent ->
-                        _uploadProgress.value = 0.10f + (percent / 100f) * 0.55f
+                        _uploadProgress.value = (percent / 100f).coerceIn(0.01f, 0.95f)
                         val mbUploaded = uploaded / (1024 * 1024)
                         val mbTotal = total / (1024 * 1024)
                         _uploadStatusText.value = if (mbTotal > 0) {

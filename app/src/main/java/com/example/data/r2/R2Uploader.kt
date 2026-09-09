@@ -278,9 +278,6 @@ object R2Uploader {
 
             inputStream.use { input ->
                 for (partNum in 1..totalParts) {
-                    val signRes = MovieApiClient.getSignPartUrl(context, targetKey, uploadId, partNum)
-                    val partUploadUrl = signRes.getOrNull()?.uploadUrl
-
                     val buffer = ByteArray(partSize.toInt())
                     var bytesReadTotal = 0
                     while (bytesReadTotal < partSize) {
@@ -290,6 +287,13 @@ object R2Uploader {
                     }
 
                     if (bytesReadTotal == 0) break
+
+                    val currentUploaded = uploadedBytesAccumulated + bytesReadTotal
+                    val currentPercent = ((currentUploaded * 100) / totalBytesCount).toInt().coerceIn(1, 99)
+                    onProgress(currentUploaded, totalBytesCount, currentPercent)
+
+                    val signRes = MovieApiClient.getSignPartUrl(context, targetKey, uploadId, partNum)
+                    val partUploadUrl = signRes.getOrNull()?.uploadUrl
 
                     val partData = if (bytesReadTotal == partSize.toInt()) buffer else buffer.copyOf(bytesReadTotal)
 
@@ -381,7 +385,7 @@ object R2Uploader {
                     completedParts.add(com.example.data.api.CompletePartDto(partNum, etag))
                     uploadedBytesAccumulated += bytesReadTotal
 
-                    val percent = ((uploadedBytesAccumulated * 100) / totalBytesCount).toInt().coerceIn(0, 99)
+                    val percent = ((uploadedBytesAccumulated * 100) / totalBytesCount).toInt().coerceIn(1, 99)
                     Log.d(TAG, "Multipart progress: $uploadedBytesAccumulated / $totalBytesCount bytes ($percent%) - Part $partNum/$totalParts done")
                     onProgress(uploadedBytesAccumulated, totalBytesCount, percent)
                 }
