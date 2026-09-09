@@ -190,12 +190,6 @@ object R2Uploader {
                 }
             }
 
-            // If direct credentials are not configured, notify user to configure or use worker for small files
-            val missingCredentialsMsg = "File is larger than 100 MB. Please provide a direct video URL or ensure backend multipart upload is deployed."
-            if (fileSize > 100 * 1024 * 1024L) {
-                return@withContext UploadResult.Failure(missingCredentialsMsg)
-            }
-
             val initResult = MovieApiClient.initiateR2Upload(
                 context = context,
                 filename = cleanFilename,
