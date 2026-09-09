@@ -15,8 +15,8 @@ object BackendConfig {
     private const val KEY_AUTH_TOKEN = "auth_jwt_token"
     private const val KEY_USER_ROLE = "user_role"
 
-    // Default API Base URL (Cloudflare Worker backend)
-    const val DEFAULT_BASE_URL = "https://movie-api.grapherkidd0.workers.dev"
+    // Default API Base URL (Supabase Edge Function r2-uploader bridge)
+    const val DEFAULT_BASE_URL = "https://vqgnxqabvmmpfoiceass.supabase.co/functions/v1/r2-uploader"
 
     fun getBaseUrl(context: Context? = null): String {
         if (context != null) {
