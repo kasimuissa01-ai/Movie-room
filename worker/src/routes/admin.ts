@@ -149,7 +149,7 @@ export async function handleAdminR2Upload(request: Request, env: Env): Promise<R
       sizeBytes
     });
   } catch (e: any) {
-    console.error(`[Diagnostic] R2/Worker upload error for key: ${url.searchParams.get('filename')}:`, e?.message || e);
+    console.error(`[Diagnostic] R2/Worker upload error:`, e?.message || e);
     return createErrorResponse(`Failed to upload file to Cloudflare storage: ${e?.message || 'Worker error'}`, 500);
   }
 }
@@ -323,11 +323,11 @@ export async function handleAdminUploadComplete(request: Request, env: Env): Pro
 
       const multipart = env.MOVIE_BUCKET.resumeMultipartUpload(key, uploadId);
       const sortedParts = parts
-        .map(p => ({
+        .map((p: any) => ({
           partNumber: parseInt(p.partNumber, 10),
           etag: (p.etag || '').replace(/^"/, '').replace(/"$/, '')
         }))
-        .sort((a, b) => a.partNumber - b.partNumber);
+        .sort((a: any, b: any) => a.partNumber - b.partNumber);
 
       await multipart.complete(sortedParts);
       console.log(`[Diagnostic] Multipart upload completed for key: ${key}`);

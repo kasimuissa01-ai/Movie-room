@@ -9,6 +9,8 @@
     "secret:put": "wrangler secret put"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.500.0",
+    "@aws-sdk/s3-request-presigner": "^3.500.0",
     "itty-router": "^5.0.18"
   },
   "devDependencies": {
