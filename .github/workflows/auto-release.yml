@@ -195,7 +195,7 @@ jobs:
             echo "Deploying Cloudflare Worker 'movie-api' from worker/ directory..."
             cd worker
             npm ci || npm install
-            npx wrangler deploy --config wrangler.toml
+            npm run deploy -- --config wrangler.toml
             cd ..
           else
             echo "CLOUDFLARE_API_TOKEN not set; skipping Worker deployment."

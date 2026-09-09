@@ -132,7 +132,7 @@ object R2Uploader {
 
     /**
      * Uploads content directly from Android Uri to Cloudflare R2.
-     * Bypasses the Cloudflare Worker media proxy so 1 GB+ movies upload seamlessly.
+     * Bypasses the Cloudflare Worker media proxy completely for unlimited file sizes and high stability.
      */
     suspend fun uploadFromUri(
         context: Context,
@@ -154,8 +154,47 @@ object R2Uploader {
                 -1L
             }
 
-            Log.d(TAG, "Initiating direct upload for $cleanFilename (size: $fileSize bytes)")
+            Log.d(TAG, "Preparing upload for $cleanFilename (size: $fileSize bytes)")
             onProgress(0, if (fileSize > 0) fileSize else 100, 1)
+
+            // PRIORITY 1: Direct Android -> Cloudflare R2 S3 Upload (Zero Worker Involvement)
+            if (R2StorageConfig.isConfigured(context)) {
+                val accountId = R2StorageConfig.getAccountId(context)
+                val bucket = R2StorageConfig.getBucketName(context)
+                val accessKeyId = R2StorageConfig.getAccessKeyId(context)
+                val secretAccessKey = R2StorageConfig.getSecretAccessKey(context)
+
+                Log.i(TAG, "Using Direct S3 Upload to Cloudflare R2 (bucket: $bucket, account: $accountId)")
+                val directResult = R2DirectS3Client.uploadFromUri(
+                    context = context,
+                    uri = uri,
+                    objectKey = objectKey,
+                    contentType = contentType,
+                    accountId = accountId,
+                    bucket = bucket,
+                    accessKeyId = accessKeyId,
+                    secretAccessKey = secretAccessKey,
+                    onProgress = onProgress
+                )
+
+                return@withContext when (directResult) {
+                    is R2DirectS3Client.UploadResult.Success -> {
+                        val publicUrl = R2StorageConfig.getPublicUrl(context, directResult.objectKey)
+                        Log.i(TAG, "Direct R2 S3 upload successful: $publicUrl")
+                        UploadResult.Success(directResult.objectKey, publicUrl)
+                    }
+                    is R2DirectS3Client.UploadResult.Failure -> {
+                        Log.e(TAG, "Direct R2 S3 upload failed: ${directResult.errorMessage}")
+                        UploadResult.Failure(directResult.errorMessage, directResult.throwable)
+                    }
+                }
+            }
+
+            // If direct credentials are not configured, notify user to configure or use worker for small files
+            val missingCredentialsMsg = "File is larger than 100 MB. Please provide a direct video URL or ensure backend multipart upload is deployed."
+            if (fileSize > 100 * 1024 * 1024L) {
+                return@withContext UploadResult.Failure(missingCredentialsMsg)
+            }
 
             val initResult = MovieApiClient.initiateR2Upload(
                 context = context,
